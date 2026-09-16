@@ -1,0 +1,234 @@
+# 1. Java / Maven
+target/
+build/
+out/
+!**/src/main/**/out/
+!**/src/test/**/out/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.zip
+*.tar.gz
+*.rar
+.mvn/wrapper/maven-wrapper.jar
+.mvn/wrapper/maven-wrapper.properties
+!mvnw
+!mvnw.cmd
+!.mvn/wrapper/maven-wrapper.jar
+# Артефакты сборки Spring Boot
+*.original
+*.repositories
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.properties
+# Кэш Maven
+.m2/
+
+
+# 2. IDE
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+.idea_modules/
+out/
+# Eclipse / STS
+.eclipse/
+.settings/
+.project
+.classpath
+.springBeans
+.sts4-cache
+.metadata/
+bin/
+# VS Code / Dev Containers
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+!.vscode/*.code-snippets
+.history/
+*.vsix
+.devcontainer/local/
+.factorypath
+.settings/
+.vscode-java/
+# NetBeans
+nbproject/private/
+nbbuild/
+dist/
+nbdist/
+.nb-gradle/
+
+
+# 3. Операционные системы
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+Icon?
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+# Linux
+*~
+.directory
+.Trash-*
+
+
+# 4. Логи и временные файлы
+*.log
+logs/
+log/
+*.log.*
+hs_err_pid*
+replay_pid*
+spring.log
+application-local.properties
+application-local.yml
+application-local.yaml
+
+
+# 5. Docker
+docker/volumes/
+pgdata/
+postgres-data/
+opensearch-data/
+docker-compose.override.yml
+docker-compose.local.yml
+*.env.local
+.env.local
+docker-compose.*.override.yml
+
+
+# 6. Переменные окружения и секреты
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+*.truststore
+application-prod.properties
+application-prod.yml
+application-prod.yaml
+application-secret.properties
+application-secret.yml
+application-secret.yaml
+
+
+# 7. Данные проекта (GeoJSON, тестовые и рабочие файлы)
+data/
+input/
+output/
+uploads/
+downloads/
+results/
+tmp/
+temp/
+*.geojson
+*.json
+!devcontainer.json
+!.devcontainer/*.json
+!.devcontainer/**/*.json
+!src/test/resources/**/*.geojson
+!src/test/resources/**/*.json
+!examples/**/*.geojson
+!examples/**/*.json
+!docs/**/*.geojson
+!docs/**/*.json
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
+!src/test/resources/**/*.zip
+
+
+# 8. PostgreSQL / OpenSearch
+*.sql.gz
+*.dump
+*.backup
+pg_dump*
+pg_backup*
+postgis_*.log
+
+
+# 9. Документация и генерация
+swagger.json
+openapi.json
+openapi.yaml
+api-docs.json
+docs/javadoc/
+javadoc/
+reports/
+*.report
+
+
+# 10. Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+.nuxt/
+.cache/
+.parcel-cache/
+
+
+# 11. Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+
+# 12. Прочее
+# Профилировщики и дампы
+*.hprof
+*.jfr
+# Временные файлы редакторов
+*.swp
+*.swo
+*~
+# Бэкапы
+*.bak
+*.backup
+*.old
+*.orig
+# Кэш
+.cache/
+tmp/
+temp/
+# Локальные заметки команды
+NOTES.md
+TODO.local.md
+*.local.md

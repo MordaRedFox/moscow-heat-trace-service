@@ -1,0 +1,50 @@
+services:
+  # Основной контейнер для разработки
+  app:
+    image: mcr.microsoft.com/vscode/devcontainers/java:0-11-bullseye
+    init: true
+    volumes:
+      - ..:/workspaces/moscow-heat-trace-service:cached
+      - heat-trace-m2:/home/vscode/.m2
+    # Удерживает контейнер запущенным, чтобы VS Code мог к нему подключиться
+    command: sleep infinity
+    user: vscode
+    environment:
+      TZ: Europe/Moscow
+      JAVA_HOME: /usr/lib/jvm/msopenjdk-11
+      MAVEN_OPTS: "-Xmx2g"
+    depends_on:
+      - postgres
+      - opensearch
+
+  # PostgreSQL с PostGIS
+  postgres:
+    image: postgis/postgis:15-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: heat_trace
+      POSTGRES_USER: heat
+      POSTGRES_PASSWORD: heat
+    volumes:
+      - heat-trace-pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  # OpenSearch
+  opensearch:
+    image: opensearchproject/opensearch:2.11.0
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+    volumes:
+      - heat-trace-osdata:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+
+volumes:
+  heat-trace-m2:
+  heat-trace-pgdata:
+  heat-trace-osdata:

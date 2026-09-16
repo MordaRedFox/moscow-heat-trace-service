@@ -1,0 +1,50 @@
+{
+  "name": "heat-trace-service (Java 11 / Spring Boot 2.6.3)",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  // Рабочая папка и ее монтирование
+  "workspaceFolder": "/workspaces/moscow-heat-trace-service",
+  "shutdownAction": "stopCompose",
+
+  // Порты: 8080 - приложение, 5005 - удаленная отладка, 5432 - PostgreSQL,
+  // 9200 - OpenSearch
+  "forwardPorts": [8080, 5005, 5432, 9200, 9600],
+  "remoteUser": "vscode",
+  // Прогрев кэша Maven после создания контейнера
+  "postCreateCommand": "mvn -B -q dependency:go-offline -DskipTests || true",
+  // Расширения и настройки VS Code внутри контейнера
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Java и Spring Boot
+        "vscjava.vscode-java-pack",
+        "vmware.vscode-boot-dev-pack",
+        // Docker
+        "ms-azuretools.vscode-docker",
+        // YAML, JSON, GeoJSON
+        "redhat.vscode-yaml",
+        "randomfractalsinc.geo-data-viewer",
+        // Git
+        "eamodio.gitlens",
+        "mhutchie.git-graph",
+        // Утилиты
+        "editorconfig.editorconfig",
+        "streetsidesoftware.code-spell-checker",
+        "streetsidesoftware.code-spell-checker-russian"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "editor.tabSize": 4,
+        "files.eol": "\n",
+        "files.insertFinalNewline": true,
+        "files.trimTrailingWhitespace": true,
+        "terminal.integrated.defaultProfile.linux": "bash",
+        // Разрешение загрузки JSON-схемы Dev Containers в недоверенной области
+        "json.schemaDownload.enable": true,
+        "json.schemaDownload.trustedDomains": {
+          "https://raw.githubusercontent.com": true
+        }
+      }
+    }
+  }
+}
