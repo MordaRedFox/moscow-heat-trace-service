@@ -20,7 +20,7 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class GeoJsonUploadService {
-    private final GeoFeatureRepository geoFeatureRepository;
+    private final GeoFeatureManager geoFeatureManager;
     private final ObjectMapper objectMapper;
 
 //    public GeoJsonUploadResponse processStream(InputStream inputStream) throws IOException, GeoJsonParseException {
@@ -155,7 +155,7 @@ public class GeoJsonUploadService {
                     .geometry(geometry)
                     .properties(properties)
                     .build();
-            geoFeatureRepository.save(geoFeature);
+            geoFeatureManager.save(geoFeature);
             response.incrementCount(objectType);
         } else if (!missing.isEmpty()) {
             response.addError(featureId, "отсутствуют поля: " + missing);
