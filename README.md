@@ -13,11 +13,31 @@ moscow-heat-trace-service/
 ├── src/
 │   ├── main/
 │   │   ├── java/ru/moscow/heat/
-│   │   │   ├── controller/
+│   │   │   ├── geojson/
+│   │   │   │   ├── controller/
+│   │   │   │   │   └── GeoJsonUploadController.java
+│   │   │   │   ├── dto/
+│   │   │   │   │   └── GeoJsonUploadResponse.java
+│   │   │   │   ├── entity/
+│   │   │   │   │   └── GeoFeature.java
+│   │   │   │   ├── exception/
+│   │   │   │   │   └── GeoJsonParseException.java
+│   │   │   │   ├── repository/
+│   │   │   │   │   └── GeoFeatureRepository.java
+│   │   │   │   ├── service/
+│   │   │   │   │   ├── GeoFeatureManager.java
+│   │   │   │   │   └── GeoJsonUploadService.java
+│   │   │   │   ├── FeatureError.java
+│   │   │   │   └── ObjectType.java
+│   │   │   │
+│   │   │   ├── health/controller/
 │   │   │   │   └── HealthController.java
-│   │   │   └── HeatTraceServiceApplication.java
+│   │   │   │
+│   │   │   ├── HeatTraceServiceApplication.java
+│   │   │   │
 │   │   └── resources/
 │   │       └── application.yml
+│   │
 │   └── test/
 │       └── java/ru/moscow/heat/
 │           └── HeatTraceServiceApplicationTests.java
