@@ -19,8 +19,13 @@ import javax.persistence.*;
 @AllArgsConstructor
 @ToString
 public class GeoFeature {
+
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "geo_feature_seq")
+    @SequenceGenerator(
+            name = "geo_feature_seq",
+            sequenceName = "geo_feature_seq",
+            allocationSize = 50)
     @Column(name = "id", nullable = false)
     private Long id;
 
@@ -34,10 +39,12 @@ public class GeoFeature {
     @Column(name = "geometry_type", nullable = false)
     private String geometryType;
 
+    @ToString.Exclude
     @Column(name = "geometry", nullable = false, columnDefinition = "jsonb")
     @Type(type = "jsonb")
     private JsonNode geometry;
 
+    @ToString.Exclude
     @Column(name = "properties", nullable = false, columnDefinition = "jsonb")
     @Type(type = "jsonb")
     private JsonNode properties;

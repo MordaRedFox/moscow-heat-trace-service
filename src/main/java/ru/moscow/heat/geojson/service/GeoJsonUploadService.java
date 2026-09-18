@@ -5,82 +5,28 @@ import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import ru.moscow.heat.geojson.ObjectType;
 import ru.moscow.heat.geojson.dto.GeoJsonUploadResponse;
 import ru.moscow.heat.geojson.entity.GeoFeature;
 import ru.moscow.heat.geojson.exception.GeoJsonParseException;
-import ru.moscow.heat.geojson.repository.GeoFeatureRepository;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class GeoJsonUploadService {
+
     private final GeoFeatureManager geoFeatureManager;
     private final ObjectMapper objectMapper;
 
-//    public GeoJsonUploadResponse processStream(InputStream inputStream) throws IOException, GeoJsonParseException {
-////        JsonNode rootNode = objectMapper.readTree(inputStream);
-//
-//        // Валидация типа GeoJson
-//        String rootType = rootNode.path("type").asText(null);
-//        if (!"FeatureCollection".equals(rootType)) {
-//            throw new GeoJsonParseException("Ожидается FeatureCollection, получено: " + rootType);
-//        }
-//
-//        // Валидация features
-//        JsonNode features = rootNode.get("features");
-//        if (features == null || !features.isArray()) {
-//            throw new GeoJsonParseException("Поле features должно быть массивом");
-//        }
-//
-//        GeoJsonUploadResponse response = new GeoJsonUploadResponse();
-//
-//        try (JsonParser parser = objectMapper.getFactory().createParser(inputStream)) {
-//            while (parser.nextToken() != JsonToken.END_ARRAY) {
-//                JsonNode feature = objectMapper.readTree(parser);
-//
-//                ObjectType objectType = ObjectType.fromString(feature.get("properties").get("object_type").asText());
-//
-//                JsonNode geometry = feature.get("geometry");
-//                String geometryType = feature.path("geometry").path("type").asText(null);
-//
-//                JsonNode properties = feature.get("properties");
-//                String featureId = feature.path("properties").path("id").asText(null);
-//
-//                // Валидация feature
-//                List<String> missing = List.of();
-//                boolean valid =
-//                        featureId != null
-//                                && geometryType != null
-//                                && objectType != null
-//                                && geometry != null
-//                                && properties != null
-//                                && (missing = missingProperties(objectType, properties)).isEmpty();
-//
-//                if (valid) {
-//                    GeoFeature geoFeature = GeoFeature.builder()
-//                            .featureId(featureId)
-//                            .objectType(objectType)
-//                            .geometryType(geometryType)
-//                            .geometry(geometry)
-//                            .properties(properties)
-//                            .build();
-//                    geoFeatureRepository.save(geoFeature);
-//
-//                    response.incrementCount(objectType);
-//                } else if (!missing.isEmpty()) {
-//                    response.addError(featureId, "отсутствуют поля: " + missing);
-//                }
-//            }
-//            return response;            }
-//        }
-
-    public GeoJsonUploadResponse processStream(InputStream inputStream) throws IOException, GeoJsonParseException {
+    public GeoJsonUploadResponse processStream(InputStream inputStream) throws IOException {
         GeoJsonUploadResponse response = new GeoJsonUploadResponse();
 
         try (JsonParser parser = objectMapper.getFactory().createParser(inputStream)) {
@@ -99,9 +45,13 @@ public class GeoJsonUploadService {
                     case "type":
                         String rootType = parser.getValueAsString();
                         if (!"FeatureCollection".equals(rootType)) {
-                            throw new GeoJsonParseException("Ожидается FeatureCollection, получено: " + rootType);
+                            throw new GeoJsonParseException(
+                                    "Ожидается FeatureCollection, получено: " + rootType);
                         }
                         typeChecked = true;
+                        break;
+                    case "crs":
+                        validateCrs(parser, response);
                         break;
                     case "features":
                         if (parser.currentToken() != JsonToken.START_ARRAY) {
@@ -130,35 +80,113 @@ public class GeoJsonUploadService {
         return response;
     }
 
+    private void validateCrs(JsonParser parser, GeoJsonUploadResponse response) throws IOException {
+        JsonNode crsNode = objectMapper.readTree(parser);
+        if (crsNode == null || crsNode.isNull()) {
+            return;
+        }
+        String crsName = crsNode.path("properties").path("name").asText(null);
+        if (crsName == null) {
+            return;
+        }
+        String normalized = crsName.toUpperCase();
+        boolean isWgs84 = normalized.contains("CRS84")
+                || normalized.contains("EPSG:4326")
+                || normalized.contains("EPSG::4326");
+        if (!isWgs84) {
+            response.addError(null,
+                    "Неожиданная CRS: " + crsName + " (ожидается WGS 84 / EPSG:4326)");
+        }
+    }
+
     private void processFeature(JsonNode feature, GeoJsonUploadResponse response) {
-        ObjectType objectType = ObjectType.fromString(
-                feature.path("properties").path("object_type").asText(null));
-        JsonNode geometry = feature.get("geometry");
-        String geometryType = feature.path("geometry").path("type").asText(null);
+        if (feature == null || !feature.isObject()) {
+            response.addError(null, "feature не является объектом");
+            return;
+        }
+
         JsonNode properties = feature.get("properties");
-        String featureId = feature.path("properties").path("id").asText(null);
+        if (properties == null || properties.isNull() || !properties.isObject()) {
+            response.addError(null, "отсутствует или некорректен блок properties");
+            return;
+        }
 
-        List<String> missing = List.of();
-        boolean valid =
-                featureId != null
-                        && geometryType != null
-                        && objectType != null
-                        && geometry != null
-                        && properties != null
-                        && (missing = missingProperties(objectType, properties)).isEmpty();
+        String featureId = properties.path("id").asText(null);
+        if (featureId == null || featureId.isEmpty()) {
+            response.addError(null, "отсутствует id");
+            return;
+        }
 
-        if (valid) {
-            GeoFeature geoFeature = GeoFeature.builder()
-                    .featureId(featureId)
-                    .objectType(objectType)
-                    .geometryType(geometryType)
-                    .geometry(geometry)
-                    .properties(properties)
-                    .build();
-            geoFeatureManager.save(geoFeature);
-            response.incrementCount(objectType);
-        } else if (!missing.isEmpty()) {
+        ObjectType objectType = ObjectType.fromString(properties.path("object_type").asText(null));
+        if (objectType == null) {
+            response.addError(featureId, "неизвестный или отсутствующий object_type");
+            return;
+        }
+
+        JsonNode geometry = feature.get("geometry");
+        if (geometry == null || geometry.isNull() || !geometry.isObject()) {
+            response.addError(featureId, "отсутствует или некорректна geometry");
+            return;
+        }
+
+        String geometryType = geometry.path("type").asText(null);
+        if (geometryType == null) {
+            response.addError(featureId, "отсутствует geometry.type");
+            return;
+        }
+
+        if (!objectType.getAllowedGeometryTypes().contains(geometryType)) {
+            response.addError(featureId,
+                    "geometry.type '" + geometryType + "' не соответствует object_type "
+                            + objectType + " (ожидается: " + objectType.getAllowedGeometryTypes() + ")");
+            return;
+        }
+
+        List<String> missing = missingProperties(objectType, properties);
+        if (!missing.isEmpty()) {
             response.addError(featureId, "отсутствуют поля: " + missing);
+            return;
+        }
+
+        GeoFeature geoFeature = GeoFeature.builder()
+                .featureId(featureId)
+                .objectType(objectType)
+                .geometryType(geometryType)
+                .geometry(geometry)
+                .properties(properties)
+                .build();
+
+        try {
+            geoFeatureManager.save(geoFeature);
+        } catch (DataIntegrityViolationException e) {
+            response.addError(featureId, "дубликат id: " + featureId);
+            return;
+        }
+
+        response.incrementCount(objectType);
+        updateBbox(geometry, response);
+    }
+
+    private void updateBbox(JsonNode geometry, GeoJsonUploadResponse response) {
+        JsonNode coordinates = geometry.get("coordinates");
+        if (coordinates == null || coordinates.isNull()) {
+            return;
+        }
+        walkCoordinates(coordinates, response);
+    }
+
+    private void walkCoordinates(JsonNode node, GeoJsonUploadResponse response) {
+        if (node == null || node.isNull() || !node.isArray()) {
+            return;
+        }
+        if (node.size() >= 2 && node.get(0).isNumber() && node.get(1).isNumber()) {
+            double x = node.get(0).asDouble();
+            double y = node.get(1).asDouble();
+            response.updateBbox(x, y);
+            return;
+        }
+        for (JsonNode child : node) {
+            walkCoordinates(child, response);
         }
     }
 
