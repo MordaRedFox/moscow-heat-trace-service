@@ -232,3 +232,4 @@ temp/
 NOTES.md
 TODO.local.md
 *.local.md
+/src/main/java/prototype/

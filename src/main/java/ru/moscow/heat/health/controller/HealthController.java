@@ -1,4 +1,4 @@
-package ru.moscow.heat.controller;
+package ru.moscow.heat.health.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;

@@ -1,0 +1,23 @@
+services:
+
+  # PostgreSQL
+  postgres:
+    image: postgres:18
+#    restart: unless-stopped
+    environment:
+      POSTGRES_DB: heat
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+#    volumes:
+#      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+#    healthcheck:
+#      test: ["CMD-SHELL", "pg_isready -U postgres -d path"]
+#      interval: 5s
+#      timeout: 5s
+#      retries: 10
+#      start_period: 10s
+#
+#volumes:
+#  postgres_data:
