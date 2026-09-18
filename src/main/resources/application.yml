@@ -2,28 +2,33 @@ server:
   port: 8080
   tomcat:
     max-swallow-size: -1
+    connection-timeout: 120000
 
 spring:
   application:
     name: heat-trace-service
 
-  # БД
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/heat}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}
     password: ${SPRING_DATASOURCE_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
 
-  # JPA
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false
     properties:
       hibernate:
-        "[format_sql]": true
+        "[format_sql]": false
         jdbc:
-          "[batch_size]": 50
+          "[batch_size]": 500
+          "[batch_versioned_data]": true
         "[order_inserts]": true
         "[order_updates]": true
 
@@ -31,8 +36,16 @@ spring:
     multipart:
       max-file-size: 3GB
       max-request-size: 3GB
+      file-size-threshold: 2MB
+      location: ${java.io.tmpdir}/heat-multipart
 
-# Настройки springdoc / Swagger
+heat:
+  upload:
+    temp-dir: ${java.io.tmpdir}/heat-uploads
+    batch-size: 500
+    error-log-limit: 20
+    session-retention-days: 7
+
 springdoc:
   api-docs:
     path: /v3/api-docs
@@ -42,7 +55,6 @@ springdoc:
     tagsSorter: alpha
   show-actuator: true
 
-# Actuator (health, info)
 management:
   endpoints:
     web:
@@ -51,3 +63,7 @@ management:
   endpoint:
     health:
       show-details: always
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{uploadId:-}] %-5level %logger{36} - %msg%n"

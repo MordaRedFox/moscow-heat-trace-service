@@ -1,11 +1,19 @@
 package ru.moscow.heat.geojson;
 
+import lombok.AllArgsConstructor;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
-@RequiredArgsConstructor
+/**
+ * Ошибка валидации одного объекта GeoJSON: идентификатор проблемного feature
+ * и текст сообщения. Jackson-совместимый (десериализуется из jsonb-сводки)
+ */
 @Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
 public class FeatureError {
-    private final String featureId;
-    private final String message;
+    private String featureId;
+    private String message;
 }
