@@ -4,28 +4,24 @@ server:
     max-swallow-size: -1
 
 spring:
-  application:
-    name: heat-trace-service
-
-  # БД
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/heat}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    url: jdbc:postgresql://localhost:5432/heat
+    username: postgres
+    password: postgres
     driver-class-name: org.postgresql.Driver
 
-  # JPA
   jpa:
     hibernate:
-      ddl-auto: update
-    show-sql: true
+      ddl-auto: validate        # схему создаёт Flyway, Hibernate только валидирует
     properties:
       hibernate:
-        "[format_sql]": true
-        jdbc:
-          "[batch_size]": 50
-        "[order_inserts]": true
-        "[order_updates]": true
+        dialect: org.hibernate.spatial.dialect.postgis.PostgisPG10Dialect
+        format_sql: true
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
 
   servlet:
     multipart:
