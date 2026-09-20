@@ -4,6 +4,11 @@ import lombok.Getter;
 
 import java.util.Set;
 
+/**
+ * Типы объектов входного GeoJSON. Для каждого типа задан набор обязательных
+ * атрибутов и допустимые типы геометрии. Значения соответствуют таблице 2.1
+ * технического приложения
+ */
 @Getter
 public enum ObjectType {
     SOURCE(
@@ -13,7 +18,7 @@ public enum ObjectType {
             Set.of("diameter", "flow_tph", "upstream_object_id"),
             Set.of("LineString")),
     HEAT_CHAMBER(
-            Set.of("diameter", "upstream_object_id"),
+            Set.of("diameter"),
             Set.of("Point")),
     OKS_FUTURE(
             Set.of("flow_tph", "heat_load"),
@@ -36,6 +41,13 @@ public enum ObjectType {
         this.allowedGeometryTypes = allowedGeometryTypes;
     }
 
+    /**
+     * Преобразует строковое значение {@code object_type}
+     * в константу enum без учета регистра
+     * @param s значение из GeoJSON (например, {@code heat_network})
+     * @return соответствующая константа или {@code null},
+     *         если тип неизвестен
+     */
     public static ObjectType fromString(String s) {
         if (s == null) {
             return null;

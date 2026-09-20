@@ -1,202 +1,130 @@
 package ru.moscow.heat.geojson.service;
 
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import ru.moscow.heat.geojson.ObjectType;
-import ru.moscow.heat.geojson.dto.GeoJsonUploadResponse;
-import ru.moscow.heat.geojson.entity.GeoFeature;
-import ru.moscow.heat.geojson.exception.GeoJsonParseException;
+import org.springframework.web.multipart.MultipartFile;
+import ru.moscow.heat.geojson.UploadStatus;
+import ru.moscow.heat.geojson.dto.UploadAcceptedResponse;
+import ru.moscow.heat.geojson.dto.UploadStatusResponse;
+import ru.moscow.heat.geojson.dto.UploadSummary;
+import ru.moscow.heat.geojson.entity.UploadSession;
+import ru.moscow.heat.geojson.exception.UploadNotFoundException;
+import ru.moscow.heat.geojson.repository.UploadSessionRepository;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.List;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.OffsetDateTime;
+import java.util.Optional;
+import java.util.UUID;
 
+/**
+ * Оркестратор загрузки GeoJSON: принимает файл, создает сессию
+ * и запускает асинхронную обработку. Парсинг делегируется
+ * {@link GeoJsonParserService}
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class GeoJsonUploadService {
 
-    private final GeoFeatureManager geoFeatureManager;
+    private final UploadSessionRepository sessionRepository;
     private final ObjectMapper objectMapper;
+    private final GeoJsonAsyncProcessor asyncProcessor;
 
-    public GeoJsonUploadResponse processStream(InputStream inputStream) throws IOException {
-        GeoJsonUploadResponse response = new GeoJsonUploadResponse();
+    @Value("${heat.upload.temp-dir}")
+    private String tempDir;
 
-        try (JsonParser parser = objectMapper.getFactory().createParser(inputStream)) {
-            if (parser.nextToken() != JsonToken.START_OBJECT) {
-                throw new GeoJsonParseException("Ожидается JSON-объект");
-            }
+    /**
+     * Сохраняет файл во временное хранилище и ставит задачу
+     * в очередь на асинхронную обработку
+     * @param file загруженный multipart-файл (до 3 ГБ)
+     * @return данные о принятой загрузке: идентификатор,
+     *         статус и URL для опроса статуса
+     * @throws IOException при ошибке чтения или записи файла
+     */
+    public UploadAcceptedResponse acceptUpload(MultipartFile file)
+            throws IOException {
+        UUID uploadId = UUID.randomUUID();
+        Path dir = Path.of(tempDir);
+        Files.createDirectories(dir);
+        Path temp = dir.resolve(uploadId + ".geojson");
 
-            boolean typeChecked = false;
-            boolean featuresFound = false;
-
-            while (parser.nextToken() == JsonToken.FIELD_NAME) {
-                String fieldName = parser.getCurrentName();
-                parser.nextToken(); // перейти к значению поля
-
-                switch (fieldName) {
-                    case "type":
-                        String rootType = parser.getValueAsString();
-                        if (!"FeatureCollection".equals(rootType)) {
-                            throw new GeoJsonParseException(
-                                    "Ожидается FeatureCollection, получено: " + rootType);
-                        }
-                        typeChecked = true;
-                        break;
-                    case "crs":
-                        validateCrs(parser, response);
-                        break;
-                    case "features":
-                        if (parser.currentToken() != JsonToken.START_ARRAY) {
-                            throw new GeoJsonParseException("Поле features должно быть массивом");
-                        }
-                        featuresFound = true;
-                        while (parser.nextToken() != JsonToken.END_ARRAY) {
-                            JsonNode feature = objectMapper.readTree(parser);
-                            processFeature(feature, response);
-                        }
-                        break;
-                    default:
-                        parser.skipChildren();
-                        break;
-                }
-            }
-
-            if (!typeChecked) {
-                throw new GeoJsonParseException("Отсутствует поле type");
-            }
-            if (!featuresFound) {
-                throw new GeoJsonParseException("Отсутствует поле features");
-            }
+        try (InputStream in = file.getInputStream();
+             OutputStream out = Files.newOutputStream(temp,
+                     StandardOpenOption.CREATE_NEW,
+                     StandardOpenOption.WRITE)) {
+            in.transferTo(out);
         }
 
-        return response;
-    }
-
-    private void validateCrs(JsonParser parser, GeoJsonUploadResponse response) throws IOException {
-        JsonNode crsNode = objectMapper.readTree(parser);
-        if (crsNode == null || crsNode.isNull()) {
-            return;
-        }
-        String crsName = crsNode.path("properties").path("name").asText(null);
-        if (crsName == null) {
-            return;
-        }
-        String normalized = crsName.toUpperCase();
-        boolean isWgs84 = normalized.contains("CRS84")
-                || normalized.contains("EPSG:4326")
-                || normalized.contains("EPSG::4326");
-        if (!isWgs84) {
-            response.addError(null,
-                    "Неожиданная CRS: " + crsName + " (ожидается WGS 84 / EPSG:4326)");
-        }
-    }
-
-    private void processFeature(JsonNode feature, GeoJsonUploadResponse response) {
-        if (feature == null || !feature.isObject()) {
-            response.addError(null, "feature не является объектом");
-            return;
-        }
-
-        JsonNode properties = feature.get("properties");
-        if (properties == null || properties.isNull() || !properties.isObject()) {
-            response.addError(null, "отсутствует или некорректен блок properties");
-            return;
-        }
-
-        String featureId = properties.path("id").asText(null);
-        if (featureId == null || featureId.isEmpty()) {
-            response.addError(null, "отсутствует id");
-            return;
-        }
-
-        ObjectType objectType = ObjectType.fromString(properties.path("object_type").asText(null));
-        if (objectType == null) {
-            response.addError(featureId, "неизвестный или отсутствующий object_type");
-            return;
-        }
-
-        JsonNode geometry = feature.get("geometry");
-        if (geometry == null || geometry.isNull() || !geometry.isObject()) {
-            response.addError(featureId, "отсутствует или некорректна geometry");
-            return;
-        }
-
-        String geometryType = geometry.path("type").asText(null);
-        if (geometryType == null) {
-            response.addError(featureId, "отсутствует geometry.type");
-            return;
-        }
-
-        if (!objectType.getAllowedGeometryTypes().contains(geometryType)) {
-            response.addError(featureId,
-                    "geometry.type '" + geometryType + "' не соответствует object_type "
-                            + objectType + " (ожидается: " + objectType.getAllowedGeometryTypes() + ")");
-            return;
-        }
-
-        List<String> missing = missingProperties(objectType, properties);
-        if (!missing.isEmpty()) {
-            response.addError(featureId, "отсутствуют поля: " + missing);
-            return;
-        }
-
-        GeoFeature geoFeature = GeoFeature.builder()
-                .featureId(featureId)
-                .objectType(objectType)
-                .geometryType(geometryType)
-                .geometry(geometry)
-                .properties(properties)
+        UploadSession session = UploadSession.builder()
+                .id(uploadId)
+                .fileName(Optional
+                        .ofNullable(file.getOriginalFilename())
+                        .filter(s -> !s.isBlank())
+                        .orElse("unnamed.geojson"))
+                .fileSize(file.getSize())
+                .status(UploadStatus.PENDING)
+                .createdAt(OffsetDateTime.now())
+                .tempFilePath(temp.toString())
                 .build();
+        sessionRepository.save(session);
 
-        try {
-            geoFeatureManager.save(geoFeature);
-        } catch (DataIntegrityViolationException e) {
-            response.addError(featureId, "дубликат id: " + featureId);
-            return;
-        }
+        asyncProcessor.processAsync(uploadId);
 
-        response.incrementCount(objectType);
-        updateBbox(geometry, response);
+        return new UploadAcceptedResponse(uploadId,
+                UploadStatus.PENDING,
+                "/api/geojson/uploads/" + uploadId);
     }
 
-    private void updateBbox(JsonNode geometry, GeoJsonUploadResponse response) {
-        JsonNode coordinates = geometry.get("coordinates");
-        if (coordinates == null || coordinates.isNull()) {
-            return;
-        }
-        walkCoordinates(coordinates, response);
-    }
+    /**
+     * Возвращает текущий статус загрузки, включая сводку
+     * и список ошибок валидации
+     * @param uploadId идентификатор сессии загрузки
+     * @return статус, временные метки, счётчики, bbox,
+     *         ошибки и признак усечения списка ошибок
+     * @throws UploadNotFoundException если загрузка не найдена
+     */
+    public UploadStatusResponse getStatus(UUID uploadId) {
+        UploadSession s = sessionRepository.findById(uploadId)
+                .orElseThrow(() -> new UploadNotFoundException(
+                        "Загрузка не найдена: " + uploadId));
 
-    private void walkCoordinates(JsonNode node, GeoJsonUploadResponse response) {
-        if (node == null || node.isNull() || !node.isArray()) {
-            return;
-        }
-        if (node.size() >= 2 && node.get(0).isNumber() && node.get(1).isNumber()) {
-            double x = node.get(0).asDouble();
-            double y = node.get(1).asDouble();
-            response.updateBbox(x, y);
-            return;
-        }
-        for (JsonNode child : node) {
-            walkCoordinates(child, response);
-        }
-    }
-
-    private List<String> missingProperties(ObjectType type, JsonNode properties) {
-        List<String> missing = new ArrayList<>();
-        for (String key : type.getRequiredProperties()) {
-            if (!properties.hasNonNull(key)) {
-                missing.add(key);
+        UploadSummary summary = null;
+        if (s.getSummary() != null && !s.getSummary().isNull()) {
+            try {
+                summary = objectMapper.treeToValue(
+                        s.getSummary(), UploadSummary.class);
+            } catch (Exception e) {
+                log.warn("Не удалось разобрать summary для {}",
+                        uploadId, e);
             }
         }
-        return missing;
+
+        return UploadStatusResponse.builder()
+                .uploadId(s.getId())
+                .status(s.getStatus())
+                .fileName(s.getFileName())
+                .fileSize(s.getFileSize())
+                .createdAt(s.getCreatedAt())
+                .startedAt(s.getStartedAt())
+                .completedAt(s.getCompletedAt())
+                .errorMessage(s.getErrorMessage())
+                .totalCount(s.getTotalCount())
+                .totalErrorsCount(s.getTotalErrorsCount())
+                .countsByType(summary != null
+                        ? summary.getCountsByType() : null)
+                .bbox(summary != null ? summary.getBbox() : null)
+                .errors(summary != null
+                        ? summary.getErrors() : null)
+                .errorsTruncated(summary != null
+                        && summary.isErrorsTruncated())
+                .build();
     }
 }

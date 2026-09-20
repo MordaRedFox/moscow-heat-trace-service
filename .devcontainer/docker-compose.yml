@@ -6,6 +6,7 @@ services:
     volumes:
       - ..:/workspaces/moscow-heat-trace-service:cached
       - heat-trace-m2:/home/vscode/.m2
+      - /var/run/docker.sock:/var/run/docker.sock
     # Удерживает контейнер запущенным, чтобы VS Code мог к нему подключиться
     command: sleep infinity
     user: vscode
