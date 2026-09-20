@@ -1,0 +1,21 @@
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+heat:
+  upload:
+    temp-dir: ${java.io.tmpdir}/heat-uploads-test
+    batch-size: 2
+    error-log-limit: 3
+    session-retention-days: 7
+
+logging:
+  level:
+    root: WARN
+    "[ru.moscow.heat]": INFO
