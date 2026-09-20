@@ -1,53 +1,93 @@
 package ru.moscow.heat.geojson.service;
 
-import lombok.extern.slf4j.Slf4j;
-import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.CoordinateSequence;
+import org.locationtech.jts.geom.CoordinateSequenceFilter;
 import org.locationtech.jts.geom.Geometry;
-import org.locationtech.proj4j.*;
+import org.locationtech.proj4j.CRSFactory;
+import org.locationtech.proj4j.CoordinateReferenceSystem;
+import org.locationtech.proj4j.CoordinateTransform;
+import org.locationtech.proj4j.CoordinateTransformFactory;
+import org.locationtech.proj4j.ProjCoordinate;
 import org.springframework.stereotype.Service;
 
-import javax.annotation.PostConstruct;
-
-@Slf4j
+/**
+ * Трансформация координат между WGS 84 (EPSG:4326) и UTM zone 37N (EPSG:32637)
+ * на базе Proj4J. Все метрические расчёты (длины, расстояния, буферы)
+ * выполняются в EPSG:32637 согласно техническому приложению.
+ *
+ * <p>Трансформация выполняется на стороне Java, чтобы не дёргать БД
+ * при батчевой вставке и чтобы её можно было покрыть unit-тестами
+ * без поднятия PostGIS.
+ */
 @Service
 public class CoordinateTransformService {
 
-    /** WGS84 (EPSG:4326) — то, что приходит из GeoJSON. */
-    private static final String WGS84 =
-            "+proj=longlat +datum=WGS84 +no_defs +type=crs";
+    public static final int SRID_WGS84 = 4326;
+    public static final int SRID_UTM_37N = 32637;
 
-    /** UTM zone 37N (EPSG:32637) — Москва, метры. */
-    private static final String UTM37N =
-            "+proj=utm +zone=37 +datum=WGS84 +units=m +no_defs +type=crs";
+    private final CoordinateTransform toUtmTransform;
+    private final CoordinateTransform toWgs84Transform;
 
-    private CoordinateTransformation transformation;
-
-    @PostConstruct
-    void init() {
+    public CoordinateTransformService() {
         CRSFactory crsFactory = new CRSFactory();
-        CoordinateReferenceSystem src = crsFactory.createFromParameters("WGS84",  WGS84);
-        CoordinateReferenceSystem dst = crsFactory.createFromParameters("UTM37N", UTM37N);
-        this.transformation = new CoordinateTransformFactory()
-                .createTransformation(src, dst);
-        log.info("Coordinate transformation WGS84 -> UTM37N initialized");
+        CoordinateReferenceSystem wgs84 = crsFactory.createFromName("EPSG:4326");
+        CoordinateReferenceSystem utm37n = crsFactory.createFromName("EPSG:32637");
+        CoordinateTransformFactory transformFactory = new CoordinateTransformFactory();
+        this.toUtmTransform = transformFactory.createTransform(wgs84, utm37n);
+        this.toWgs84Transform = transformFactory.createTransform(utm37n, wgs84);
     }
 
-    /** Возвращает НОВУЮ геометрию в EPSG:32637, исходная не меняется. */
-    public Geometry toUtm37N(Geometry source) {
-        if (source == null) return null;
+    /**
+     * Трансформирует геометрию из EPSG:4326 в EPSG:32637,
+     * сохраняя тип геометрии и проставляя SRID 32637
+     */
+    public Geometry toUtm(Geometry wgs84Geometry) {
+        return transform(wgs84Geometry, toUtmTransform, SRID_UTM_37N);
+    }
+
+    /**
+     * Обратная трансформация из EPSG:32637 в EPSG:4326 (SRID 4326)
+     */
+    public Geometry toWgs84(Geometry utmGeometry) {
+        return transform(utmGeometry, toWgs84Transform, SRID_WGS84);
+    }
+
+    /**
+     * Трансформация одиночной точки
+     *
+     * @param lon долгота, град (EPSG:4326)
+     * @param lat широта, град (EPSG:4326)
+     * @return массив {easting, northing} в метрах EPSG:32637
+     */
+    public double[] transformPoint(double lon, double lat) {
+        ProjCoordinate dst = new ProjCoordinate();
+        toUtmTransform.transform(new ProjCoordinate(lon, lat), dst);
+        return new double[]{dst.x, dst.y};
+    }
+
+    private Geometry transform(Geometry source, CoordinateTransform transform, int targetSrid) {
         Geometry copy = source.copy();
-        ProjCoordinate in  = new ProjCoordinate();
-        ProjCoordinate out = new ProjCoordinate();
-        for (Coordinate c : copy.getCoordinates()) {
-            in.x = c.x;
-            in.y = c.y;
-            transformation.transform(in, out);
-            c.x = out.x;
-            c.y = out.y;
-            // z оставляем как есть
-        }
-        copy.geometryChanged();
-        copy.setSRID(32637);
+        copy.apply(new CoordinateSequenceFilter() {
+            @Override
+            public void filter(CoordinateSequence seq, int i) {
+                ProjCoordinate src = new ProjCoordinate(seq.getX(i), seq.getY(i));
+                ProjCoordinate dst = new ProjCoordinate();
+                transform.transform(src, dst);
+                seq.setOrdinate(i, CoordinateSequence.X, dst.x);
+                seq.setOrdinate(i, CoordinateSequence.Y, dst.y);
+            }
+
+            @Override
+            public boolean isDone() {
+                return false;
+            }
+
+            @Override
+            public boolean isGeometryChanged() {
+                return true;
+            }
+        });
+        copy.setSRID(targetSrid);
         return copy;
     }
 }

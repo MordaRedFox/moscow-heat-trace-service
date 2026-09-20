@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.locationtech.jts.geom.Geometry;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -26,7 +27,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Потоковый парсер GeoJSON с валидацией структуры, обязательных атрибутов и
  * типов геометрии. Файл не загружается в память целиком; валидные объекты
- * сохраняются батчами
+ * сохраняются батчами.
+ *
+ * <p>Для каждой валидной фичи дополнительно строится JTS-геометрия
+ * (колонка geom, SRID 4326) и её проекция в UTM 37N (колонка geom_utm,
+ * SRID 32637) — см. {@link GeometryConverterService} и
+ * {@link CoordinateTransformService}.
  */
 @Slf4j
 @Service
@@ -35,6 +41,8 @@ public class GeoJsonParserService {
 
     private final GeoFeatureBatchWriter batchWriter;
     private final ObjectMapper objectMapper;
+    private final GeometryConverterService geometryConverter;
+    private final CoordinateTransformService coordinateTransformService;
 
     @Value("${heat.upload.batch-size:500}")
     private int batchSize;
@@ -46,12 +54,6 @@ public class GeoJsonParserService {
      * Разбирает поток GeoJSON и сохраняет валидные объекты
      * батчами по {@link #batchSize}. Дубликаты {@code id} в рамках одной
      * загрузки отсеиваются до записи в БД и попадают в список ошибок
-     * @param inputStream поток входного файла
-     * @param uploadId    идентификатор загрузки, проставляется
-     *                    в каждый {@link GeoFeature}
-     * @return сводка: счетчики по типам, bbox, ошибки
-     * @throws IOException           при ошибках чтения потока
-     * @throws GeoJsonParseException при структурных ошибках
      */
     public GeoJsonUploadResponse processStream(
             InputStream inputStream, UUID uploadId) throws IOException {
@@ -65,21 +67,17 @@ public class GeoJsonParserService {
             if (parser.nextToken() != JsonToken.START_OBJECT) {
                 throw new GeoJsonParseException("Ожидается JSON-объект");
             }
-
             boolean typeChecked = false;
             boolean featuresFound = false;
-
             while (parser.nextToken() == JsonToken.FIELD_NAME) {
                 String fieldName = parser.getCurrentName();
                 parser.nextToken();
-
                 switch (fieldName) {
                     case "type":
                         String rootType = parser.getValueAsString();
                         if (!"FeatureCollection".equals(rootType)) {
                             throw new GeoJsonParseException(
-                                    "Ожидается FeatureCollection, "
-                                            + "получено: " + rootType);
+                                    "Ожидается FeatureCollection, получено: " + rootType);
                         }
                         typeChecked = true;
                         break;
@@ -87,27 +85,21 @@ public class GeoJsonParserService {
                         validateCrs(parser);
                         break;
                     case "features":
-                        if (parser.currentToken()
-                                != JsonToken.START_ARRAY) {
+                        if (parser.currentToken() != JsonToken.START_ARRAY) {
                             throw new GeoJsonParseException(
-                                    "Поле features должно быть "
-                                            + "массивом");
+                                    "Поле features должно быть массивом");
                         }
                         featuresFound = true;
-                        while (parser.nextToken()
-                                != JsonToken.END_ARRAY) {
-                            JsonNode feature =
-                                    objectMapper.readTree(parser);
+                        while (parser.nextToken() != JsonToken.END_ARRAY) {
+                            JsonNode feature = objectMapper.readTree(parser);
                             GeoFeature gf = validateAndMap(
-                                    feature, uploadId,
-                                    response, logCounter);
+                                    feature, uploadId, response, logCounter);
                             if (gf == null) {
                                 continue;
                             }
                             if (!seenIds.add(gf.getFeatureId())) {
                                 response.addError(gf.getFeatureId(),
-                                        "дубликат id в рамках загрузки: "
-                                                + gf.getFeatureId());
+                                        "дубликат id в рамках загрузки: " + gf.getFeatureId());
                                 continue;
                             }
                             batch.add(gf);
@@ -121,34 +113,25 @@ public class GeoJsonParserService {
                         break;
                 }
             }
-
             if (!typeChecked) {
-                throw new GeoJsonParseException(
-                        "Отсутствует поле type");
+                throw new GeoJsonParseException("Отсутствует поле type");
             }
             if (!featuresFound) {
-                throw new GeoJsonParseException(
-                        "Отсутствует поле features");
+                throw new GeoJsonParseException("Отсутствует поле features");
             }
         }
-
         flushBatch(batch, response);
-
         if (response.isErrorsTruncated()) {
             log.warn("Список ошибок обрезан: показано {}, всего {}",
-                    response.getErrors().size(),
-                    response.getTotalErrorsCount());
+                    response.getErrors().size(), response.getTotalErrorsCount());
         }
         return response;
     }
 
     /**
      * Сбрасывает накопленный батч в БД. Основной путь - пакетная вставка;
-     * при нарушении целостности на уровне БД (например, из-за рассинхрона
-     * между in-memory проверкой дубликатов и уникальным индексом) переходит
-     * к поштучной вставке, чтобы локализовать проблемную фичу
-     * @param batch    список объектов для сохранения
-     * @param response накопитель счётчиков и ошибок
+     * при нарушении целостности на уровне БД переходит к поштучной вставке,
+     * чтобы локализовать проблемную фичу
      */
     private void flushBatch(List<GeoFeature> batch,
                             GeoJsonUploadResponse response) {
@@ -162,8 +145,8 @@ public class GeoJsonParserService {
                 updateBbox(f.getGeometry(), response);
             }
         } catch (DataIntegrityViolationException e) {
-            log.warn("Батч не сохранён целиком, переходим "
-                    + "к поштучной вставке: {}", e.getMessage());
+            log.warn("Батч не сохранён целиком, переходим к поштучной вставке: {}",
+                    e.getMessage());
             for (GeoFeature f : batch) {
                 try {
                     batchWriter.saveSingle(f);
@@ -171,14 +154,11 @@ public class GeoJsonParserService {
                     updateBbox(f.getGeometry(), response);
                 } catch (DataIntegrityViolationException ex) {
                     response.addError(f.getFeatureId(),
-                            "дубликат id в рамках загрузки: "
-                                    + f.getFeatureId());
+                            "дубликат id в рамках загрузки: " + f.getFeatureId());
                 } catch (Exception ex) {
-                    log.error("Ошибка сохранения feature {}",
-                            f.getFeatureId(), ex);
+                    log.error("Ошибка сохранения feature {}", f.getFeatureId(), ex);
                     response.addError(f.getFeatureId(),
-                            "ошибка сохранения: "
-                                    + ex.getMessage());
+                            "ошибка сохранения: " + ex.getMessage());
                 }
             }
         } finally {
@@ -187,31 +167,23 @@ public class GeoJsonParserService {
     }
 
     /**
-     * Валидирует один feature и превращает его в {@link GeoFeature}. При любой
-     * ошибке возвращает {@code null} и фиксирует сообщение в {@code response}
-     * @param feature    узел feature из потока
-     * @param uploadId   идентификатор загрузки
-     * @param response   накопитель ошибок и счётчиков
-     * @param logCounter счётчик для ограничения логирования
-     * @return валидный {@link GeoFeature} или {@code null}
+     * Валидирует один feature и превращает его в {@link GeoFeature},
+     * включая построение PostGIS-геометрий geom (4326) и geom_utm (32637).
+     * При любой ошибке возвращает {@code null} и фиксирует сообщение
      */
     private GeoFeature validateAndMap(JsonNode feature, UUID uploadId,
                                       GeoJsonUploadResponse response,
                                       AtomicInteger logCounter) {
         if (feature == null || !feature.isObject()) {
-            addError(response, logCounter, null,
-                    "feature не является объектом");
+            addError(response, logCounter, null, "feature не является объектом");
             return null;
         }
-
         JsonNode properties = feature.get("properties");
-        if (properties == null || properties.isNull()
-                || !properties.isObject()) {
+        if (properties == null || properties.isNull() || !properties.isObject()) {
             addError(response, logCounter, null,
                     "отсутствует или некорректен блок properties");
             return null;
         }
-
         if (!properties.hasNonNull("id")) {
             addError(response, logCounter, null, "отсутствует id");
             return null;
@@ -221,7 +193,6 @@ public class GeoJsonParserService {
             addError(response, logCounter, null, "отсутствует id");
             return null;
         }
-
         ObjectType objectType = ObjectType.fromString(
                 properties.path("object_type").asText(null));
         if (objectType == null) {
@@ -229,55 +200,53 @@ public class GeoJsonParserService {
                     "неизвестный или отсутствующий object_type");
             return null;
         }
-
         JsonNode geometry = feature.get("geometry");
-        if (geometry == null || geometry.isNull()
-                || !geometry.isObject()) {
+        if (geometry == null || geometry.isNull() || !geometry.isObject()) {
             addError(response, logCounter, featureId,
                     "отсутствует или некорректна geometry");
             return null;
         }
-
         String geometryType = geometry.path("type").asText(null);
         if (geometryType == null) {
-            addError(response, logCounter, featureId,
-                    "отсутствует geometry.type");
+            addError(response, logCounter, featureId, "отсутствует geometry.type");
             return null;
         }
-
-        if (!objectType.getAllowedGeometryTypes()
-                .contains(geometryType)) {
+        if (!objectType.getAllowedGeometryTypes().contains(geometryType)) {
             addError(response, logCounter, featureId,
                     "geometry.type '" + geometryType
-                            + "' не соответствует object_type "
-                            + objectType + " (ожидается: "
-                            + objectType.getAllowedGeometryTypes()
-                            + ")");
+                            + "' не соответствует object_type " + objectType
+                            + " (ожидается: " + objectType.getAllowedGeometryTypes() + ")");
             return null;
         }
-
-        String coordError = validateCoordinates(
-                geometryType, geometry.get("coordinates"));
+        String coordError = validateCoordinates(geometryType, geometry.get("coordinates"));
         if (coordError != null) {
             addError(response, logCounter, featureId, coordError);
             return null;
         }
-
-        List<String> missing = missingProperties(
-                objectType, properties);
+        List<String> missing = missingProperties(objectType, properties);
         if (!missing.isEmpty()) {
             addError(response, logCounter, featureId,
                     "отсутствуют поля: " + missing);
             return null;
         }
-
-        List<String> typeErrors =
-                validateAttributeTypes(properties);
+        List<String> typeErrors = validateAttributeTypes(properties);
         if (!typeErrors.isEmpty()) {
             addError(response, logCounter, featureId,
                     "некорректные типы полей: " + typeErrors);
             return null;
         }
+
+        // Построение PostGIS-представлений: JTS (4326) + проекция UTM 37N
+        Geometry jtsGeometry;
+        try {
+            jtsGeometry = geometryConverter.fromGeoJson(geometry);
+        } catch (RuntimeException e) {
+            addError(response, logCounter, featureId,
+                    "геометрия не читается JTS: " + e.getMessage());
+            return null;
+        }
+        jtsGeometry.setSRID(CoordinateTransformService.SRID_WGS84);
+        Geometry utmGeometry = coordinateTransformService.toUtm(jtsGeometry);
 
         return GeoFeature.builder()
                 .uploadId(uploadId)
@@ -286,6 +255,8 @@ public class GeoJsonParserService {
                 .geometryType(geometryType)
                 .geometry(geometry)
                 .properties(properties)
+                .geom(jtsGeometry)
+                .geomUtm(utmGeometry)
                 .build();
     }
 
@@ -298,8 +269,7 @@ public class GeoJsonParserService {
                           String featureId, String message) {
         response.addError(featureId, message);
         if (counter.incrementAndGet() <= errorLogLimit) {
-            log.warn("Validation error [{}]: {}",
-                    featureId, message);
+            log.warn("Validation error [{}]: {}", featureId, message);
         }
     }
 
@@ -312,8 +282,7 @@ public class GeoJsonParserService {
         if (crsNode == null || crsNode.isNull()) {
             return;
         }
-        String crsName = crsNode.path("properties")
-                .path("name").asText(null);
+        String crsName = crsNode.path("properties").path("name").asText(null);
         if (crsName == null) {
             return;
         }
@@ -331,8 +300,7 @@ public class GeoJsonParserService {
     /**
      * Обновляет bbox по геометрии объекта
      */
-    private void updateBbox(JsonNode geometry,
-                            GeoJsonUploadResponse response) {
+    private void updateBbox(JsonNode geometry, GeoJsonUploadResponse response) {
         JsonNode coordinates = geometry.get("coordinates");
         if (coordinates == null || coordinates.isNull()) {
             return;
@@ -344,15 +312,12 @@ public class GeoJsonParserService {
      * Рекурсивно обходит координаты GeoJSON, определяя
      * пары [x, y] и передавая их в bbox
      */
-    private void walkCoordinates(JsonNode node,
-                                 GeoJsonUploadResponse response) {
+    private void walkCoordinates(JsonNode node, GeoJsonUploadResponse response) {
         if (node == null || node.isNull() || !node.isArray()) {
             return;
         }
-        if (node.size() >= 2 && node.get(0).isNumber()
-                && node.get(1).isNumber()) {
-            response.updateBbox(node.get(0).asDouble(),
-                    node.get(1).asDouble());
+        if (node.size() >= 2 && node.get(0).isNumber() && node.get(1).isNumber()) {
+            response.updateBbox(node.get(0).asDouble(), node.get(1).asDouble());
             return;
         }
         for (JsonNode child : node) {
@@ -361,11 +326,9 @@ public class GeoJsonParserService {
     }
 
     /**
-     * Возвращает список отсутствующих обязательных
-     * атрибутов для указанного типа объекта
+     * Возвращает список отсутствующих обязательных атрибутов для типа
      */
-    private List<String> missingProperties(ObjectType type,
-                                           JsonNode properties) {
+    private List<String> missingProperties(ObjectType type, JsonNode properties) {
         List<String> missing = new ArrayList<>();
         for (String key : type.getRequiredProperties()) {
             if (!properties.hasNonNull(key)) {
@@ -376,12 +339,11 @@ public class GeoJsonParserService {
     }
 
     /**
-     * Проверяет структуру блока coordinates в зависимости
-     * от типа геометрии
+     * Проверяет структуру блока coordinates в зависимости от типа геометрии
+     *
      * @return текст ошибки или {@code null}, если структура корректна
      */
-    private String validateCoordinates(String geometryType,
-                                       JsonNode coordinates) {
+    private String validateCoordinates(String geometryType, JsonNode coordinates) {
         if (coordinates == null || coordinates.isNull()) {
             return "отсутствуют coordinates";
         }
@@ -392,36 +354,28 @@ public class GeoJsonParserService {
             case "Point":
                 return validatePoint(coordinates, "coordinates");
             case "LineString":
-                return validateLineString(coordinates,
-                        "coordinates");
+                return validateLineString(coordinates, "coordinates");
             case "Polygon":
                 return validatePolygon(coordinates, "coordinates");
             case "MultiPolygon":
-                return validateMultiPolygon(coordinates,
-                        "coordinates");
+                return validateMultiPolygon(coordinates, "coordinates");
             default:
                 return null;
         }
     }
 
-    /**
-     * Проверяет Point: массив из ≥2 чисел в допустимых
-     * диапазонах долготы и широты
-     */
+    /** Проверяет Point: массив из ≥2 чисел в допустимых диапазонах */
     private String validatePoint(JsonNode point, String path) {
         if (!point.isArray() || point.size() < 2) {
-            return path + ": Point должен содержать "
-                    + "минимум 2 координаты";
+            return path + ": Point должен содержать минимум 2 координаты";
         }
         if (!point.get(0).isNumber() || !point.get(1).isNumber()) {
-            return path + ": координаты Point "
-                    + "должны быть числами";
+            return path + ": координаты Point должны быть числами";
         }
         double lon = point.get(0).asDouble();
         double lat = point.get(1).asDouble();
         if (lon < -180.0 || lon > 180.0) {
-            return path + ": долгота вне диапазона "
-                    + "[-180, 180]";
+            return path + ": долгота вне диапазона [-180, 180]";
         }
         if (lat < -90.0 || lat > 90.0) {
             return path + ": широта вне диапазона [-90, 90]";
@@ -429,17 +383,13 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /**
-     * Проверяет LineString: минимум 2 корректные точки
-     */
+    /** Проверяет LineString: минимум 2 корректные точки */
     private String validateLineString(JsonNode line, String path) {
         if (!line.isArray() || line.size() < 2) {
-            return path + ": LineString должен содержать "
-                    + "минимум 2 точки";
+            return path + ": LineString должен содержать минимум 2 точки";
         }
         for (int i = 0; i < line.size(); i++) {
-            String err = validatePoint(line.get(i),
-                    path + "[" + i + "]");
+            String err = validatePoint(line.get(i), path + "[" + i + "]");
             if (err != null) {
                 return err;
             }
@@ -447,17 +397,13 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /**
-     * Проверяет Polygon: минимум одно корректное кольцо
-     */
+    /** Проверяет Polygon: минимум одно корректное кольцо */
     private String validatePolygon(JsonNode polygon, String path) {
         if (!polygon.isArray() || polygon.size() < 1) {
-            return path + ": Polygon должен содержать "
-                    + "минимум 1 кольцо";
+            return path + ": Polygon должен содержать минимум 1 кольцо";
         }
         for (int i = 0; i < polygon.size(); i++) {
-            String err = validateLinearRing(polygon.get(i),
-                    path + "[" + i + "]");
+            String err = validateLinearRing(polygon.get(i), path + "[" + i + "]");
             if (err != null) {
                 return err;
             }
@@ -465,18 +411,13 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /**
-     * Проверяет MultiPolygon: минимум один корректный полигон
-     */
-    private String validateMultiPolygon(JsonNode multi,
-                                        String path) {
+    /** Проверяет MultiPolygon: минимум один корректный полигон */
+    private String validateMultiPolygon(JsonNode multi, String path) {
         if (!multi.isArray() || multi.size() < 1) {
-            return path + ": MultiPolygon должен содержать "
-                    + "минимум 1 полигон";
+            return path + ": MultiPolygon должен содержать минимум 1 полигон";
         }
         for (int i = 0; i < multi.size(); i++) {
-            String err = validatePolygon(multi.get(i),
-                    path + "[" + i + "]");
+            String err = validatePolygon(multi.get(i), path + "[" + i + "]");
             if (err != null) {
                 return err;
             }
@@ -484,40 +425,29 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /**
-     * Проверяет кольцо: ≥4 корректных точек, первая и последняя точки
-     * должны совпадать
-     */
+    /** Проверяет кольцо: ≥4 корректных точек, первая и последняя совпадают */
     private String validateLinearRing(JsonNode ring, String path) {
         if (!ring.isArray() || ring.size() < 4) {
-            return path + ": кольцо должно содержать "
-                    + "минимум 4 точки";
+            return path + ": кольцо должно содержать минимум 4 точки";
         }
         for (int i = 0; i < ring.size(); i++) {
-            String err = validatePoint(ring.get(i),
-                    path + "[" + i + "]");
+            String err = validatePoint(ring.get(i), path + "[" + i + "]");
             if (err != null) {
                 return err;
             }
         }
         JsonNode first = ring.get(0);
         JsonNode last = ring.get(ring.size() - 1);
-        if (Double.compare(first.get(0).asDouble(),
-                last.get(0).asDouble()) != 0
-                || Double.compare(first.get(1).asDouble(),
-                last.get(1).asDouble()) != 0) {
+        if (Double.compare(first.get(0).asDouble(), last.get(0).asDouble()) != 0
+                || Double.compare(first.get(1).asDouble(), last.get(1).asDouble()) != 0) {
             return path + ": кольцо должно быть замкнуто "
-                    + "(первая и последняя точки должны "
-                    + "совпадать)";
+                    + "(первая и последняя точки должны совпадать)";
         }
         return null;
     }
 
-    /**
-     * Проверяет типы известных атрибутов, если они присутствуют в properties
-     */
-    private List<String> validateAttributeTypes(
-            JsonNode properties) {
+    /** Проверяет типы известных атрибутов, если они присутствуют в properties */
+    private List<String> validateAttributeTypes(JsonNode properties) {
         List<String> errors = new ArrayList<>();
         checkString(properties, "id", errors);
         checkString(properties, "object_type", errors);
@@ -530,33 +460,21 @@ public class GeoJsonParserService {
         return errors;
     }
 
-    /**
-     * Проверяет, что поле, если задано, является целым числом
-     */
-    private void checkInteger(JsonNode node, String field,
-                              List<String> errors) {
+    private void checkInteger(JsonNode node, String field, List<String> errors) {
         JsonNode v = node.get(field);
         if (v != null && !v.isNull() && !v.isIntegralNumber()) {
             errors.add(field + " должен быть целым числом");
         }
     }
 
-    /**
-     * Проверяет, что поле, если задано, является числом
-     */
-    private void checkNumber(JsonNode node, String field,
-                             List<String> errors) {
+    private void checkNumber(JsonNode node, String field, List<String> errors) {
         JsonNode v = node.get(field);
         if (v != null && !v.isNull() && !v.isNumber()) {
             errors.add(field + " должен быть числом");
         }
     }
 
-    /**
-     * Проверяет, что поле, если задано, является строкой
-     */
-    private void checkString(JsonNode node, String field,
-                             List<String> errors) {
+    private void checkString(JsonNode node, String field, List<String> errors) {
         JsonNode v = node.get(field);
         if (v != null && !v.isNull() && !v.isTextual()) {
             errors.add(field + " должен быть строкой");

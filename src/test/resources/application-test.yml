@@ -2,7 +2,9 @@ spring:
   jpa:
     hibernate:
       ddl-auto: create-drop
-    show-sql: false
+  sql:
+    init:
+      mode: always
   servlet:
     multipart:
       max-file-size: 100MB

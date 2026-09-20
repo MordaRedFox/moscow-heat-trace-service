@@ -39,7 +39,7 @@ public class GeoObjectPersister {
 
         Geometry geom4326 = geometryMapper.toJts(geometryNode);
         geom4326.setSRID(4326);
-        Geometry geomUtm = transformService.toUtm37N(geom4326);
+        Geometry geomUtm = transformService.toUtm(geom4326);
 
         switch (type) {
             case SOURCE -> sourceRepo.save(build(new SourceEntity(), featureId, geom4326, geomUtm, properties));
