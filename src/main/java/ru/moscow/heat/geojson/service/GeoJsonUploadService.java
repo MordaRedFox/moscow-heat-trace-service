@@ -11,7 +11,7 @@ import ru.moscow.heat.geojson.dto.UploadAcceptedResponse;
 import ru.moscow.heat.geojson.dto.UploadStatusResponse;
 import ru.moscow.heat.geojson.dto.UploadSummary;
 import ru.moscow.heat.geojson.entity.UploadSession;
-import ru.moscow.heat.geojson.exception.GeoJsonParseException;
+import ru.moscow.heat.geojson.exception.UploadNotFoundException;
 import ru.moscow.heat.geojson.repository.UploadSessionRepository;
 
 import java.io.IOException;
@@ -67,6 +67,7 @@ public class GeoJsonUploadService {
                 .id(uploadId)
                 .fileName(Optional
                         .ofNullable(file.getOriginalFilename())
+                        .filter(s -> !s.isBlank())
                         .orElse("unnamed.geojson"))
                 .fileSize(file.getSize())
                 .status(UploadStatus.PENDING)
@@ -88,11 +89,11 @@ public class GeoJsonUploadService {
      * @param uploadId идентификатор сессии загрузки
      * @return статус, временные метки, счётчики, bbox,
      *         ошибки и признак усечения списка ошибок
-     * @throws GeoJsonParseException если загрузка не найдена
+     * @throws UploadNotFoundException если загрузка не найдена
      */
     public UploadStatusResponse getStatus(UUID uploadId) {
         UploadSession s = sessionRepository.findById(uploadId)
-                .orElseThrow(() -> new GeoJsonParseException(
+                .orElseThrow(() -> new UploadNotFoundException(
                         "Загрузка не найдена: " + uploadId));
 
         UploadSummary summary = null;

@@ -18,7 +18,7 @@ public enum ObjectType {
             Set.of("diameter", "flow_tph", "upstream_object_id"),
             Set.of("LineString")),
     HEAT_CHAMBER(
-            Set.of("diameter", "upstream_object_id"),
+            Set.of("diameter"),
             Set.of("Point")),
     OKS_FUTURE(
             Set.of("flow_tph", "heat_load"),

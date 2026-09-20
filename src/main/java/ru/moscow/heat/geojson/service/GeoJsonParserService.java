@@ -17,7 +17,9 @@ import ru.moscow.heat.geojson.exception.GeoJsonParseException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -42,7 +44,8 @@ public class GeoJsonParserService {
 
     /**
      * Разбирает поток GeoJSON и сохраняет валидные объекты
-     * батчами по {@link #batchSize}
+     * батчами по {@link #batchSize}. Дубликаты {@code id} в рамках одной
+     * загрузки отсеиваются до записи в БД и попадают в список ошибок
      * @param inputStream поток входного файла
      * @param uploadId    идентификатор загрузки, проставляется
      *                    в каждый {@link GeoFeature}
@@ -54,6 +57,7 @@ public class GeoJsonParserService {
             InputStream inputStream, UUID uploadId) throws IOException {
         GeoJsonUploadResponse response = new GeoJsonUploadResponse();
         List<GeoFeature> batch = new ArrayList<>(batchSize);
+        Set<String> seenIds = new HashSet<>();
         AtomicInteger logCounter = new AtomicInteger(0);
 
         try (JsonParser parser = objectMapper.getFactory()
@@ -97,11 +101,18 @@ public class GeoJsonParserService {
                             GeoFeature gf = validateAndMap(
                                     feature, uploadId,
                                     response, logCounter);
-                            if (gf != null) {
-                                batch.add(gf);
-                                if (batch.size() >= batchSize) {
-                                    flushBatch(batch, response);
-                                }
+                            if (gf == null) {
+                                continue;
+                            }
+                            if (!seenIds.add(gf.getFeatureId())) {
+                                response.addError(gf.getFeatureId(),
+                                        "дубликат id в рамках загрузки: "
+                                                + gf.getFeatureId());
+                                continue;
+                            }
+                            batch.add(gf);
+                            if (batch.size() >= batchSize) {
+                                flushBatch(batch, response);
                             }
                         }
                         break;
@@ -132,8 +143,10 @@ public class GeoJsonParserService {
     }
 
     /**
-     * Сбрасывает накопленный батч в БД. При нарушении целостности переходит к
-     * поштучной вставке, чтобы локализовать дубликат id
+     * Сбрасывает накопленный батч в БД. Основной путь - пакетная вставка;
+     * при нарушении целостности на уровне БД (например, из-за рассинхрона
+     * между in-memory проверкой дубликатов и уникальным индексом) переходит
+     * к поштучной вставке, чтобы локализовать проблемную фичу
      * @param batch    список объектов для сохранения
      * @param response накопитель счётчиков и ошибок
      */
@@ -199,8 +212,12 @@ public class GeoJsonParserService {
             return null;
         }
 
-        String featureId = properties.path("id").asText(null);
-        if (featureId == null || featureId.isEmpty()) {
+        if (!properties.hasNonNull("id")) {
+            addError(response, logCounter, null, "отсутствует id");
+            return null;
+        }
+        String featureId = properties.get("id").asText();
+        if (featureId.isEmpty()) {
             addError(response, logCounter, null, "отсутствует id");
             return null;
         }

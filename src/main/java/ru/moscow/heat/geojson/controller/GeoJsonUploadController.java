@@ -12,6 +12,7 @@ import org.springframework.web.multipart.MultipartFile;
 import ru.moscow.heat.geojson.dto.UploadAcceptedResponse;
 import ru.moscow.heat.geojson.dto.UploadStatusResponse;
 import ru.moscow.heat.geojson.exception.GeoJsonParseException;
+import ru.moscow.heat.geojson.exception.UploadNotFoundException;
 import ru.moscow.heat.geojson.service.GeoJsonUploadService;
 
 import java.io.IOException;
@@ -70,6 +71,14 @@ public class GeoJsonUploadController {
     public ResponseEntity<Map<String, String>> handleParseError(
             GeoJsonParseException ex) {
         return ResponseEntity.badRequest()
+                .body(Map.of("error", ex.getMessage()));
+    }
+
+    /** Загрузка не найдена - HTTP 404 */
+    @ExceptionHandler(UploadNotFoundException.class)
+    public ResponseEntity<Map<String, String>> handleNotFound(
+            UploadNotFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(Map.of("error", ex.getMessage()));
     }
 

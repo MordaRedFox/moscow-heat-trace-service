@@ -4,6 +4,7 @@
 #  - добавляет workspace в git safe.directory
 #  - ставит Maven через SDKMAN (если еще не стоит)
 #  - прогревает локальный кэш Maven-зависимостей
+#  - выставляет права на /var/run/docker.sock для Testcontainers
 
 set +u
 
@@ -32,4 +33,9 @@ if [ -f pom.xml ]; then
   mvn -B -q dependency:go-offline -DskipTests || true
 else
   echo "[post-create] pom.xml not found, skipping cache warmup"
+fi
+
+echo "[post-create] fixing docker.sock permissions"
+if [ -S /var/run/docker.sock ]; then
+  sudo chmod 666 /var/run/docker.sock
 fi

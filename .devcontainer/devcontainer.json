@@ -11,6 +11,9 @@
   "remoteUser": "vscode",
   "remoteEnv": {
     "SDKMAN_DIR": "/usr/local/sdkman",
+    // Testcontainers через Docker-out-of-Docker: тестовые контейнеры
+    // стартуют на хосте, приложение обращается к ним по этому имени
+    "TESTCONTAINERS_HOST_OVERRIDE": "host.docker.internal",
     "PATH": "/usr/local/sdkman/candidates/maven/current/bin:/usr/local/sdkman/candidates/java/current/bin:${containerEnv:PATH}"
   },
   // Скрипты вынесены в отдельные файлы

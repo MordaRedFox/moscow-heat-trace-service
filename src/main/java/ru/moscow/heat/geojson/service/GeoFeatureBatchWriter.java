@@ -14,7 +14,9 @@ import java.util.List;
  * Отдельный бин для пакетной вставки {@link GeoFeature}.
  * Вызовы {@code flush} и {@code clear} заставляют Hibernate
  * отправлять данные одним batch-INSERT, что критично при
- * загрузке больших файлов
+ * загрузке больших файлов. {@code clear} выполняется в
+ * {@code finally}, чтобы persistence context не оставался
+ * грязным после неудачного {@code flush}
  */
 @Service
 @RequiredArgsConstructor
@@ -31,9 +33,12 @@ public class GeoFeatureBatchWriter {
      */
     @Transactional
     public void saveBatch(List<GeoFeature> batch) {
-        repository.saveAll(batch);
-        em.flush();
-        em.clear();
+        try {
+            repository.saveAll(batch);
+            em.flush();
+        } finally {
+            em.clear();
+        }
     }
 
     /**
@@ -43,8 +48,11 @@ public class GeoFeatureBatchWriter {
      */
     @Transactional
     public void saveSingle(GeoFeature feature) {
-        repository.save(feature);
-        em.flush();
-        em.clear();
+        try {
+            repository.save(feature);
+            em.flush();
+        } finally {
+            em.clear();
+        }
     }
 }
