@@ -8,9 +8,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Создаёт GIST-индексы по пространственным колонкам geo_feature после старта
- * приложения (т.е. после того, как Hibernate ddl-auto создаст/обновит таблицу).
- * Все операторы идемпотентны (IF NOT EXISTS), повторный запуск безопасен.
+ * Создает GIST-индексы по пространственным колонкам всех таблиц
+ * после старта приложения (то есть после того, как Hibernate
+ * {@code ddl-auto} создаст/обновит схему). Все операторы
+ * идемпотентны ({@code IF NOT EXISTS}), повторный запуск безопасен
  */
 @Slf4j
 @Component
@@ -22,15 +23,36 @@ public class SpatialIndexInitializer implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         try {
-            jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS idx_geo_feature_geom_gist "
-                    + "ON geo_feature USING GIST (geom)");
-            jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS idx_geo_feature_geom_utm_gist "
-                    + "ON geo_feature USING GIST (geom_utm)");
-            log.info("GIST-индексы geo_feature(geom, geom_utm) проверены/созданы");
+            // Сырая таблица geo_feature
+            gist("geo_feature", "geom");
+            gist("geo_feature", "geom_utm");
+
+            // Типизированные таблицы
+            gist("source", "geometry");
+            gist("source", "geometry_utm");
+            gist("heat_network", "geometry");
+            gist("heat_network", "geometry_utm");
+            gist("heat_chamber", "geometry");
+            gist("heat_chamber", "geometry_utm");
+            gist("oks_connection_point", "geometry");
+            gist("oks_connection_point", "geometry_utm");
+            gist("restriction", "geometry");
+            gist("restriction", "geometry_utm");
+
+            log.info("GIST-индексы проверены/созданы");
         } catch (Exception e) {
-            // Индексы критичны для производительности, но не для работоспособности:
-            // не роняем приложение, проблему будет видно в логах
-            log.error("Не удалось создать GIST-индексы: {}", e.getMessage(), e);
+            log.error("Не удалось создать GIST-индексы: {}",
+                    e.getMessage(), e);
         }
+    }
+
+    /**
+     * Идемпотентно создает GIST-индекс на указанной колонке
+     */
+    private void gist(String table, String column) {
+        String indexName = "idx_" + table + "_" + column + "_gist";
+        jdbcTemplate.execute("CREATE INDEX IF NOT EXISTS "
+                + indexName + " ON " + table
+                + " USING GIST (" + column + ")");
     }
 }

@@ -1,3 +1,10 @@
 package ru.moscow.heat.geojson.repository;
 
-public interface HeatNetworkRepository extends JpaRepository<HeatNetworkEntity, Long> {}
+import ru.moscow.heat.geojson.entity.HeatNetworkEntity;
+
+/**
+ * Репозиторий участков существующей тепловой сети
+ */
+public interface HeatNetworkRepository
+        extends UploadAwareRepository<HeatNetworkEntity> {
+}

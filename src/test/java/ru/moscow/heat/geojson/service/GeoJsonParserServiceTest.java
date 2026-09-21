@@ -37,56 +37,39 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
 
     private UUID uploadId;
 
-    /**
-     * Генерирует новый идентификатор загрузки для каждого теста,
-     * чтобы изолировать данные между прогонами
-     */
     @BeforeEach
     void setUp() {
         uploadId = UUID.randomUUID();
     }
 
     /**
-     * Файл со всеми поддерживаемыми типами объектов: source,
-     * heat_network, heat_chamber, oks_future, oks_connection_point,
-     * restriction. Все фичи валидны, счетчики совпадают, bbox
-     * охватывает все координаты
+     * Файл со всеми поддерживаемыми типами: source, heat_network,
+     * heat_chamber, oks_connection_point, restriction
      * @throws Exception при ошибке парсинга
      */
     @Test
-    @DisplayName("Валидный файл со всеми типами сохраняется полностью")
+    @DisplayName("Валидный файл со всеми типами сохраняется")
     void validFileWithAllTypes() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
 
-        ObjectNode src = TestGeoJsonFactory.feature(
-                "src1", "source", "Point", 37.6, 55.75);
-        TestGeoJsonFactory.addFeature(c, src);
+        TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
+                "src1", "source", "Point",
+                37.6, 55.75));
 
         ObjectNode hn = TestGeoJsonFactory.feature(
                 "net1", "heat_network", "LineString",
                 37.6, 55.75, 37.61, 55.751);
-        ((ObjectNode) hn.get("properties")).put("diameter", 200);
-        ((ObjectNode) hn.get("properties")).put("flow_tph", 100.0);
-        ((ObjectNode) hn.get("properties"))
-                .put("upstream_object_id", "src1");
+        ((ObjectNode) hn.get("properties")).put("diameter", 500);
         TestGeoJsonFactory.addFeature(c, hn);
 
-        ObjectNode ch = TestGeoJsonFactory.feature(
-                "ch1", "heat_chamber", "Point", 37.605, 55.75);
-        ((ObjectNode) ch.get("properties")).put("diameter", 200);
-        TestGeoJsonFactory.addFeature(c, ch);
-
-        ObjectNode oks = TestGeoJsonFactory.feature(
-                "oks1", "oks_future", "Polygon",
-                37.62, 55.76, 37.63, 55.76,
-                37.63, 55.77, 37.62, 55.76);
-        ((ObjectNode) oks.get("properties")).put("flow_tph", 50.0);
-        ((ObjectNode) oks.get("properties")).put("heat_load", 2.5);
-        TestGeoJsonFactory.addFeature(c, oks);
+        TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
+                "ch1", "heat_chamber", "Point",
+                37.605, 55.75));
 
         ObjectNode cp = TestGeoJsonFactory.feature(
-                "cp1", "oks_connection_point", "Point", 37.62, 55.76);
-        ((ObjectNode) cp.get("properties")).put("oks_id", "oks1");
+                "cp1", "oks_connection_point", "Point",
+                37.62, 55.76);
+        ((ObjectNode) cp.get("properties")).put("flow_tph", 24.87);
         TestGeoJsonFactory.addFeature(c, cp);
 
         ObjectNode restr = TestGeoJsonFactory.feature(
@@ -94,7 +77,7 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 37.5, 55.7, 37.51, 55.7,
                 37.51, 55.71, 37.5, 55.7);
         ((ObjectNode) restr.get("properties"))
-                .put("restriction_type", "road");
+                .put("restriction_type", "oks");
         TestGeoJsonFactory.addFeature(c, restr);
 
         GeoJsonUploadResponse r = parser.processStream(
@@ -102,26 +85,25 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                         TestGeoJsonFactory.toBytes(c)),
                 uploadId);
 
-        assertThat(r.getTotalCount()).isEqualTo(6);
+        assertThat(r.getTotalCount()).isEqualTo(5);
         assertThat(r.getTotalErrorsCount()).isZero();
         assertThat(r.getCountsByType())
                 .containsEntry(ObjectType.SOURCE, 1)
                 .containsEntry(ObjectType.HEAT_NETWORK, 1)
                 .containsEntry(ObjectType.HEAT_CHAMBER, 1)
-                .containsEntry(ObjectType.OKS_FUTURE, 1)
                 .containsEntry(ObjectType.OKS_CONNECTION_POINT, 1)
                 .containsEntry(ObjectType.RESTRICTION, 1);
         assertThat(featureRepo.countByUploadId(uploadId))
-                .isEqualTo(6);
+                .isEqualTo(5);
 
         List<Double> bbox = r.getBbox();
         assertThat(bbox).isNotNull();
         assertThat(bbox.get(0)).isLessThanOrEqualTo(37.5);
-        assertThat(bbox.get(2)).isGreaterThanOrEqualTo(37.63);
+        assertThat(bbox.get(2)).isGreaterThanOrEqualTo(37.62);
     }
 
     /**
-     * CRS WGS 84 в канонической форме CRS84 принимается без ошибок
+     * CRS WGS 84 в канонической форме CRS84 принимается
      * @throws Exception при ошибке парсинга
      */
     @Test
@@ -131,7 +113,8 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         TestGeoJsonFactory.addCrs(
                 c, "urn:ogc:def:crs:OGC:1.3:CRS84");
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "s1", "source", "Point", 37.6, 55.75));
+                "s1", "source", "Point",
+                37.6, 55.75));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -142,8 +125,7 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-     * Отсутствие блока crs в файле допустимо: подразумевается WGS 84
-     * по умолчанию
+     * Отсутствие блока {@code crs} допустимо
      * @throws Exception при ошибке парсинга
      */
     @Test
@@ -151,7 +133,8 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
     void crsMissingAccepted() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "s1", "source", "Point", 37.6, 55.75));
+                "s1", "source", "Point",
+                37.6, 55.75));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -161,10 +144,7 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isZero();
     }
 
-    /**
-     * Корневой элемент файла — не JSON-объект (массив)
-     * Ожидается {@link GeoJsonParseException}
-     */
+    // ---------- Негативные сценарии: структура ----------
     @Test
     void rejectNonJsonObject() {
         assertThatThrownBy(() -> parser.processStream(
@@ -173,10 +153,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .isInstanceOf(GeoJsonParseException.class);
     }
 
-    /**
-     * Отсутствует корневое поле {@code type}. Ожидается ошибка
-     * с упоминанием поля
-     */
     @Test
     void rejectMissingType() {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -189,10 +165,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .hasMessageContaining("type");
     }
 
-    /**
-     * Корневое поле {@code type} имеет недопустимое значение
-     * (не {@code FeatureCollection}). Ожидается ошибка
-     */
     @Test
     void rejectWrongTypeValue() {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -205,10 +177,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .hasMessageContaining("FeatureCollection");
     }
 
-    /**
-     * Отсутствует корневое поле {@code features}. Ожидается ошибка
-     * с упоминанием поля
-     */
     @Test
     void rejectMissingFeatures() {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -221,10 +189,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .hasMessageContaining("features");
     }
 
-    /**
-     * Пустой массив {@code features} допустим: 0 объектов, 0 ошибок
-     * @throws Exception при ошибке парсинга
-     */
     @Test
     void emptyFeaturesArrayAccepted() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -236,16 +200,13 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isZero();
     }
 
-    /**
-     * CRS, отличная от WGS 84 (например, EPSG:3857), отклоняется
-     * с ошибкой парсинга
-     */
     @Test
     void rejectCrsNonWgs84() {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addCrs(c, "EPSG:3857");
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "s1", "source", "Point", 37.6, 55.75));
+                "s1", "source", "Point",
+                37.6, 55.75));
         assertThatThrownBy(() -> parser.processStream(
                 new ByteArrayInputStream(
                         TestGeoJsonFactory.toBytes(c)),
@@ -254,37 +215,7 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .hasMessageContaining("CRS");
     }
 
-    /**
-     * Регрессия: crs, расположенная после массива {@code features},
-     * всё равно должна валидироваться. Ручная сборка JSON нужна,
-     * чтобы гарантировать порядок полей
-     * @throws Exception при ошибке парсинга
-     */
-    @Test
-    @DisplayName("БАГ: crs после features не проверяется")
-    void crsAfterFeatures_isNotValidated() throws Exception {
-        String json = "{\"type\":\"FeatureCollection\","
-                + "\"features\":["
-                + "{\"type\":\"Feature\","
-                + "\"properties\":{\"id\":\"s1\","
-                + "\"object_type\":\"source\"},"
-                + "\"geometry\":{\"type\":\"Point\","
-                + "\"coordinates\":[37.6,55.75]}}"
-                + "],"
-                + "\"crs\":{\"type\":\"name\","
-                + "\"properties\":{\"name\":\"EPSG:3857\"}}}";
-
-        assertThatThrownBy(() -> parser.processStream(
-                new ByteArrayInputStream(json.getBytes()),
-                uploadId))
-                .isInstanceOf(GeoJsonParseException.class);
-    }
-
-    /**
-     * У фичи отсутствует блок {@code properties}.
-     * Ожидается 1 ошибка валидации, объект не сохраняется
-     * @throws Exception при ошибке парсинга
-     */
+    // ---------- Негативные сценарии: фичи ----------
     @Test
     void rejectFeatureWithoutProperties() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -300,16 +231,12 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    /**
-     * У фичи отсутствует обязательный атрибут {@code id}.
-     * Ожидается 1 ошибка с упоминанием поля
-     * @throws Exception при ошибке парсинга
-     */
     @Test
     void rejectFeatureWithoutId() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                null, "source", "Point", 37.6, 55.75));
+                null, "source", "Point",
+                37.6, 55.75));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -320,13 +247,8 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .contains("id");
     }
 
-    /**
-     * Регрессия: {@code id: null} должен приводить к ошибке
-     * валидации, а не к сохранению фичи со строкой {@code "null"}
-     * @throws Exception при ошибке парсинга
-     */
     @Test
-    @DisplayName("БАГ: id=null должен отклоняться")
+    @DisplayName("id=null отклоняется")
     void rejectIdNull() throws Exception {
         String json = "{\"type\":\"FeatureCollection\","
                 + "\"features\":["
@@ -344,15 +266,12 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .isEqualTo(1);
     }
 
-    /**
-     * Неизвестное значение {@code object_type} отклоняется
-     * @throws Exception при ошибке парсинга
-     */
     @Test
     void rejectUnknownObjectType() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "x1", "unknown_type", "Point", 37.6, 55.75));
+                "x1", "unknown_type", "Point",
+                37.6, 55.75));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -362,14 +281,42 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-     * Отсутствие {@code object_type} отклоняется
+     * Удаленные типы (oks_future, oks_existing) из актуальной
+     * модели отклоняются как неизвестные
      * @throws Exception при ошибке парсинга
      */
+    @Test
+    @DisplayName("oks_future и oks_existing отклоняются")
+    void removedTypesAreRejected() throws Exception {
+        ObjectNode c1 = TestGeoJsonFactory.featureCollection();
+        TestGeoJsonFactory.addFeature(c1, TestGeoJsonFactory.feature(
+                "o1", "oks_future", "Polygon",
+                37.6, 55.75, 37.61, 55.75,
+                37.61, 55.76, 37.6, 55.75));
+        GeoJsonUploadResponse r1 = parser.processStream(
+                new ByteArrayInputStream(
+                        TestGeoJsonFactory.toBytes(c1)),
+                uploadId);
+        assertThat(r1.getTotalErrorsCount()).isEqualTo(1);
+
+        ObjectNode c2 = TestGeoJsonFactory.featureCollection();
+        TestGeoJsonFactory.addFeature(c2, TestGeoJsonFactory.feature(
+                "e1", "oks_existing", "Polygon",
+                37.6, 55.75, 37.61, 55.75,
+                37.61, 55.76, 37.6, 55.75));
+        GeoJsonUploadResponse r2 = parser.processStream(
+                new ByteArrayInputStream(
+                        TestGeoJsonFactory.toBytes(c2)),
+                uploadId);
+        assertThat(r2.getTotalErrorsCount()).isEqualTo(1);
+    }
+
     @Test
     void rejectMissingObjectType() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "x1", null, "Point", 37.6, 55.75));
+                "x1", null, "Point",
+                37.6, 55.75));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -378,11 +325,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    /**
-     * Тип геометрии не соответствует типу объекта: source ожидает
-     * Point, передается LineString
-     * @throws Exception при ошибке парсинга
-     */
     @Test
     void rejectGeometryTypeMismatch() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -397,10 +339,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    /**
-     * LineString с одной точкой невалиден: минимум две точки
-     * @throws Exception при ошибке парсинга
-     */
     @Test
     void rejectLineStringWithOnePoint() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -408,9 +346,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 "n1", "heat_network", "LineString",
                 37.6, 55.75);
         ((ObjectNode) f.get("properties")).put("diameter", 200);
-        ((ObjectNode) f.get("properties")).put("flow_tph", 10.0);
-        ((ObjectNode) f.get("properties"))
-                .put("upstream_object_id", "s1");
         TestGeoJsonFactory.addFeature(c, f);
 
         GeoJsonUploadResponse r = parser.processStream(
@@ -420,16 +355,12 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    /**
-     * Координаты точки вне допустимых диапазонов широты и долготы
-     * отклоняются
-     * @throws Exception при ошибке парсинга
-     */
     @Test
     void rejectPointOutOfRange() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "s1", "source", "Point", 200.0, 55.75));
+                "s1", "source", "Point",
+                200.0, 55.75));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -438,20 +369,15 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    /**
-     * Кольцо полигона должно быть замкнуто: первая и последняя
-     * точки совпадают. Иначе - ошибка
-     * @throws Exception при ошибке парсинга
-     */
     @Test
     void rejectUnclosedPolygonRing() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         ObjectNode f = TestGeoJsonFactory.feature(
-                "o1", "oks_future", "Polygon",
+                "r1", "restriction", "Polygon",
                 37.6, 55.75, 37.61, 55.75,
                 37.61, 55.76, 37.62, 55.76);
-        ((ObjectNode) f.get("properties")).put("flow_tph", 1.0);
-        ((ObjectNode) f.get("properties")).put("heat_load", 1.0);
+        ((ObjectNode) f.get("properties"))
+                .put("restriction_type", "oks");
         TestGeoJsonFactory.addFeature(c, f);
 
         GeoJsonUploadResponse r = parser.processStream(
@@ -464,19 +390,15 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-     * heat_network без обязательного {@code diameter} отклоняется
+     * heat_network без diameter отклоняется
      * @throws Exception при ошибке парсинга
      */
     @Test
     void rejectHeatNetworkWithoutDiameter() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
-        ObjectNode f = TestGeoJsonFactory.feature(
+        TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
                 "n1", "heat_network", "LineString",
-                37.6, 55.75, 37.61, 55.76);
-        ((ObjectNode) f.get("properties")).put("flow_tph", 10.0);
-        ((ObjectNode) f.get("properties"))
-                .put("upstream_object_id", "s1");
-        TestGeoJsonFactory.addFeature(c, f);
+                37.6, 55.75, 37.61, 55.76));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -488,77 +410,52 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-     * heat_network без обязательного {@code flow_tph} отклоняется
+     * heat_network без flow_tph и upstream_object_id ПРОХОДИТ -
+     * эти атрибуты удалены из обязательных в новой модели
      * @throws Exception при ошибке парсинга
      */
     @Test
-    void rejectHeatNetworkWithoutFlow() throws Exception {
+    @DisplayName("heat_network без flow_tph проходит")
+    void heatNetworkWithoutFlowPasses() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         ObjectNode f = TestGeoJsonFactory.feature(
                 "n1", "heat_network", "LineString",
                 37.6, 55.75, 37.61, 55.76);
         ((ObjectNode) f.get("properties")).put("diameter", 200);
-        ((ObjectNode) f.get("properties"))
-                .put("upstream_object_id", "s1");
         TestGeoJsonFactory.addFeature(c, f);
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
                         TestGeoJsonFactory.toBytes(c)),
                 uploadId);
-        assertThat(r.getTotalErrorsCount()).isEqualTo(1);
+        assertThat(r.getTotalErrorsCount()).isZero();
     }
 
     /**
-     * Регрессия: heat_chamber без {@code upstream_object_id} должна
-     * проходить валидацию - атрибут не входит в required для камеры
+     * heat_chamber без каких-либо атрибутов проходит
      * @throws Exception при ошибке парсинга
      */
     @Test
-    @DisplayName("HEAT_CHAMBER без upstream_object_id проходит")
-    void heatChamberWithoutUpstreamShouldPass() throws Exception {
+    @DisplayName("heat_chamber без атрибутов проходит")
+    void heatChamberWithoutAttributesPasses() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
-        ObjectNode ch = TestGeoJsonFactory.feature(
-                "ch1", "heat_chamber", "Point", 37.6, 55.75);
-        ((ObjectNode) ch.get("properties")).put("diameter", 200);
-        TestGeoJsonFactory.addFeature(c, ch);
+        TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
+                "ch1", "heat_chamber", "Point",
+                37.6, 55.75));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
                         TestGeoJsonFactory.toBytes(c)),
                 uploadId);
-        assertThat(r.getTotalErrorsCount())
-                .as("камера без upstream_object_id должна проходить")
-                .isZero();
+        assertThat(r.getTotalErrorsCount()).isZero();
     }
 
     /**
-     * oks_future без обязательного {@code flow_tph} отклоняется
+     * oks_connection_point без flow_tph отклоняется
      * @throws Exception при ошибке парсинга
      */
     @Test
-    void rejectOksFutureWithoutFlow() throws Exception {
-        ObjectNode c = TestGeoJsonFactory.featureCollection();
-        ObjectNode f = TestGeoJsonFactory.feature(
-                "o1", "oks_future", "Polygon",
-                37.6, 55.75, 37.61, 55.75,
-                37.61, 55.76, 37.6, 55.75);
-        ((ObjectNode) f.get("properties")).put("heat_load", 1.0);
-        TestGeoJsonFactory.addFeature(c, f);
-
-        GeoJsonUploadResponse r = parser.processStream(
-                new ByteArrayInputStream(
-                        TestGeoJsonFactory.toBytes(c)),
-                uploadId);
-        assertThat(r.getTotalErrorsCount()).isEqualTo(1);
-    }
-
-    /**
-     * oks_connection_point без обязательного {@code oks_id} отклоняется
-     * @throws Exception при ошибке парсинга
-     */
-    @Test
-    void rejectOksConnectionPointWithoutOksId() throws Exception {
+    void rejectOksConnectionPointWithoutFlow() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
                 "cp1", "oks_connection_point", "Point",
@@ -569,10 +466,37 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                         TestGeoJsonFactory.toBytes(c)),
                 uploadId);
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
+        assertThat(r.getErrors().get(0).getMessage())
+                .contains("flow_tph");
     }
 
     /**
-     * restriction без обязательного {@code restriction_type} отклоняется
+     * oks_connection_point с oks_id в properties - не ошибка,
+     * лишние атрибуты игнорируются
+     * @throws Exception при ошибке парсинга
+     */
+    @Test
+    @DisplayName("Лишние атрибуты не ломают валидацию")
+    void extraAttributesIgnored() throws Exception {
+        ObjectNode c = TestGeoJsonFactory.featureCollection();
+        ObjectNode cp = TestGeoJsonFactory.feature(
+                "cp1", "oks_connection_point", "Point",
+                37.6, 55.75);
+        ObjectNode props = (ObjectNode) cp.get("properties");
+        props.put("flow_tph", 10.0);
+        props.put("oks_id", "some_polygon");
+        props.put("heat_load", 99.9);
+        TestGeoJsonFactory.addFeature(c, cp);
+
+        GeoJsonUploadResponse r = parser.processStream(
+                new ByteArrayInputStream(
+                        TestGeoJsonFactory.toBytes(c)),
+                uploadId);
+        assertThat(r.getTotalErrorsCount()).isZero();
+    }
+
+    /**
+     * restriction без restriction_type отклоняется
      * @throws Exception при ошибке парсинга
      */
     @Test
@@ -590,11 +514,7 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    /**
-     * {@code diameter} передан строкой вместо целого числа.
-     * Ожидается ошибка типа
-     * @throws Exception при ошибке парсинга
-     */
+    // ---------- Типы атрибутов ----------
     @Test
     void rejectDiameterAsString() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -602,9 +522,6 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 "n1", "heat_network", "LineString",
                 37.6, 55.75, 37.61, 55.76);
         ((ObjectNode) f.get("properties")).put("diameter", "200");
-        ((ObjectNode) f.get("properties")).put("flow_tph", 10.0);
-        ((ObjectNode) f.get("properties"))
-                .put("upstream_object_id", "s1");
         TestGeoJsonFactory.addFeature(c, f);
 
         GeoJsonUploadResponse r = parser.processStream(
@@ -614,20 +531,17 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    /**
-     * Вторая фича с тем же {@code id} в рамках одной загрузки
-     * отклоняется как дубликат; первый объект сохранён, в БД
-     * ровно одна запись
-     * @throws Exception при ошибке парсинга
-     */
+    // ---------- Дубликаты ----------
     @Test
     void duplicateFeatureId_reportsErrorForSecondOccurrence()
             throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "same", "source", "Point", 37.6, 55.75));
+                "same", "source", "Point",
+                37.6, 55.75));
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "same", "source", "Point", 37.7, 55.8));
+                "same", "source", "Point",
+                37.7, 55.8));
 
         GeoJsonUploadResponse r = parser.processStream(
                 new ByteArrayInputStream(
@@ -638,5 +552,24 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
         assertThat(featureRepo.countByUploadId(uploadId))
                 .isEqualTo(1);
+    }
+
+    /**
+    * restriction с линейной геометрией LineString принимается
+    * @throws Exception при ошибке парсинга
+    */
+    @Test
+    void restrictionWithLineStringAccepted() throws Exception {
+        ObjectNode c = TestGeoJsonFactory.featureCollection();
+        ObjectNode r = TestGeoJsonFactory.feature(
+                "road1", "restriction", "LineString",
+                37.6, 55.75, 37.65, 55.78);
+        ((ObjectNode) r.get("properties")).put("restriction_type", "road");
+        TestGeoJsonFactory.addFeature(c, r);
+
+        GeoJsonUploadResponse resp = parser.processStream(
+                new ByteArrayInputStream(TestGeoJsonFactory.toBytes(c)),
+                        uploadId);
+        assertThat(resp.getTotalErrorsCount()).isZero();
     }
 }

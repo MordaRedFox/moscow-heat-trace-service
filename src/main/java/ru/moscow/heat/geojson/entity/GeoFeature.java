@@ -15,8 +15,7 @@ import java.util.UUID;
  * Загруженный объект GeoJSON. Изолирован по {@code upload_id}:
  * уникальность обеспечивается парой (upload_id, feature_id),
  * что позволяет параллельно обрабатывать несколько файлов.
- *
- * <p>Геометрия хранится в трёх представлениях:
+ * <p>Геометрия хранится в трех представлениях:
  * <ul>
  *   <li>{@code geometry} (jsonb) — исходный GeoJSON-узел, как пришёл из файла;</li>
  *   <li>{@code geom} (PostGIS, SRID 4326) — JTS-геометрия для пространственных запросов;</li>
@@ -76,12 +75,14 @@ public class GeoFeature {
     @Type(type = "jsonb")
     private JsonNode properties;
 
-    /** PostGIS-геометрия в WGS 84 (SRID 4326), GIST-индекс создаётся SpatialIndexInitializer */
+    /** PostGIS-геометрия в WGS 84 (SRID 4326), GIST-индекс создается
+     * SpatialIndexInitializer */
     @ToString.Exclude
     @Column(name = "geom", columnDefinition = "geometry(Geometry,4326)")
     private Geometry geom;
 
-    /** Материализованная проекция UTM zone 37N (SRID 32637) для метрических расчётов */
+    /** Материализованная проекция UTM zone 37N (SRID 32637) для
+     * метрических расчетов */
     @ToString.Exclude
     @Column(name = "geom_utm", columnDefinition = "geometry(Geometry,32637)")
     private Geometry geomUtm;

@@ -11,18 +11,23 @@ import javax.persistence.PersistenceContext;
 import java.util.List;
 
 /**
- * Отдельный бин для пакетной вставки {@link GeoFeature}.
- * Вызовы {@code flush} и {@code clear} заставляют Hibernate
- * отправлять данные одним batch-INSERT, что критично при
- * загрузке больших файлов. {@code clear} выполняется в
- * {@code finally}, чтобы persistence context не оставался
- * грязным после неудачного {@code flush}
+ * Пакетная вставка {@link GeoFeature} в двух представлениях:
+ * <ul>
+ *   <li>сырая таблица {@code geo_feature} — исходный JSONB + PostGIS;</li>
+ *   <li>типизированная таблица ({@code source}, {@code heat_network}
+ *       и т.д.) — через {@link GeoObjectPersister}.</li>
+ * </ul>
+ * Оба представления пишутся в одной транзакции, поэтому при
+ * ошибке откатываются согласованно. {@code em.clear()} в
+ * {@code finally} очищает persistence context даже после
+ * неудачного {@code flush}
  */
 @Service
 @RequiredArgsConstructor
 public class GeoFeatureBatchWriter {
 
     private final GeoFeatureRepository repository;
+    private final GeoObjectPersister persister;
 
     @PersistenceContext
     private EntityManager em;
@@ -34,6 +39,9 @@ public class GeoFeatureBatchWriter {
     @Transactional
     public void saveBatch(List<GeoFeature> batch) {
         try {
+            for (GeoFeature f : batch) {
+                persister.persist(f);
+            }
             repository.saveAll(batch);
             em.flush();
         } finally {
@@ -42,13 +50,14 @@ public class GeoFeatureBatchWriter {
     }
 
     /**
-     * Поштучная вставка. Используется при разборе батча,
-     * в котором обнаружены дубликаты id
+     * Поштучная вставка. Используется при разборе батча, в котором
+     * обнаружены дубликаты id, чтобы локализовать проблемную фичу
      * @param feature сохраняемый объект
      */
     @Transactional
     public void saveSingle(GeoFeature feature) {
         try {
+            persister.persist(feature);
             repository.save(feature);
             em.flush();
         } finally {

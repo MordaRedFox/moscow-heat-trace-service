@@ -11,6 +11,11 @@ import org.springframework.test.util.ReflectionTestUtils;
 import ru.moscow.heat.geojson.UploadStatus;
 import ru.moscow.heat.geojson.entity.UploadSession;
 import ru.moscow.heat.geojson.repository.GeoFeatureRepository;
+import ru.moscow.heat.geojson.repository.HeatChamberRepository;
+import ru.moscow.heat.geojson.repository.HeatNetworkRepository;
+import ru.moscow.heat.geojson.repository.OksConnectionPointRepository;
+import ru.moscow.heat.geojson.repository.RestrictionRepository;
+import ru.moscow.heat.geojson.repository.SourceRepository;
 import ru.moscow.heat.geojson.repository.UploadSessionRepository;
 
 import java.io.IOException;
@@ -28,10 +33,9 @@ import static org.mockito.Mockito.*;
 
 /**
  * Unit-тесты планировщика очистки {@link UploadCleanupScheduler}.
- * Репозитории подменяются моками. Проверяются: удаление связанных
- * фич, временного файла и самой сессии, отсутствие действий при
- * пустом списке старых сессий, а также корректный набор статусов
- * в фильтре выборки
+ * Проверяет, что при удалении старой сессии чистятся данные из
+ * {@code geo_feature} и 5 типизированных таблиц, а также удаляется
+ * временный файл и сама сессия
  */
 @ExtendWith(MockitoExtension.class)
 class UploadCleanupSchedulerTest {
@@ -42,6 +46,21 @@ class UploadCleanupSchedulerTest {
     @Mock
     private GeoFeatureRepository geoFeatureRepository;
 
+    @Mock
+    private SourceRepository sourceRepo;
+
+    @Mock
+    private HeatNetworkRepository heatNetworkRepo;
+
+    @Mock
+    private HeatChamberRepository heatChamberRepo;
+
+    @Mock
+    private OksConnectionPointRepository oksCpRepo;
+
+    @Mock
+    private RestrictionRepository restrictionRepo;
+
     @InjectMocks
     private UploadCleanupScheduler scheduler;
 
@@ -49,8 +68,8 @@ class UploadCleanupSchedulerTest {
     private Path tempDir;
 
     /**
-     * Устанавливает фиксированный срок хранения, чтобы тест
-     * не зависел от значения в application.yml
+     * Фиксированный срок хранения, чтобы тест не зависел от
+     * значения в application.yml
      */
     @BeforeEach
     void setUp() {
@@ -58,16 +77,15 @@ class UploadCleanupSchedulerTest {
     }
 
     /**
-     * Полный цикл очистки одной старой сессии: удаляются связанные
-     * фичи, временный файл и сама сессия
-     * @throws IOException при ошибке создания временного файла
+     * Полный цикл очистки одной старой сессии: удаляются записи
+     * из {@code geo_feature}, всех типизированных таблиц, сессии
+     * и временного файла
+     * @throws IOException при создании временного файла
      */
     @Test
-    void cleanupOldSessions_deletesFeaturesFileAndSession()
-            throws IOException {
+    void cleanupOldSessions_deletesFromAllTables() throws IOException {
         UUID id = UUID.randomUUID();
-        Path tmp = Files.createFile(
-                tempDir.resolve("old.geojson"));
+        Path tmp = Files.createFile(tempDir.resolve("old.geojson"));
         UploadSession old = UploadSession.builder()
                 .id(id)
                 .fileName("old.geojson")
@@ -76,21 +94,24 @@ class UploadCleanupSchedulerTest {
                 .createdAt(OffsetDateTime.now().minusDays(30))
                 .tempFilePath(tmp.toString())
                 .build();
-
         when(sessionRepository.findByStatusInAndCreatedAtBefore(
                 anyCollection(), any(OffsetDateTime.class)))
                 .thenReturn(List.of(old));
 
         scheduler.cleanupOldSessions();
 
+        verify(sourceRepo).deleteByUploadId(id);
+        verify(heatNetworkRepo).deleteByUploadId(id);
+        verify(heatChamberRepo).deleteByUploadId(id);
+        verify(oksCpRepo).deleteByUploadId(id);
+        verify(restrictionRepo).deleteByUploadId(id);
         verify(geoFeatureRepository).deleteByUploadId(id);
         verify(sessionRepository).delete(old);
         assertThat(Files.exists(tmp)).isFalse();
     }
 
     /**
-     * Если старых сессий нет, планировщик не выполняет никаких
-     * удаляющих операций
+     * Если старых сессий нет, планировщик не выполняет удаляющих операций
      */
     @Test
     void cleanupOldSessions_nothingToDelete_doesNothing() {
@@ -101,15 +122,17 @@ class UploadCleanupSchedulerTest {
         scheduler.cleanupOldSessions();
 
         verify(geoFeatureRepository, never()).deleteByUploadId(any());
+        verify(sourceRepo, never()).deleteByUploadId(any());
+        verify(heatNetworkRepo, never()).deleteByUploadId(any());
         verify(sessionRepository, never()).delete(any());
     }
 
     /**
-     * Регрессия: планировщик должен запрашивать только завершенные
-     * и упавшие сессии, не затрагивая активные (PENDING, PROCESSING)
+     * Регрессия: планировщик запрашивает только завершенные
+     * и упавшие сессии, не затрагивая активные
      */
     @Test
-    void cleanupOldSessions_pendingAndProcessingAreNotRequested() {
+    void cleanupOldSessions_onlyCompletedAndFailedRequested() {
         scheduler.cleanupOldSessions();
 
         verify(sessionRepository).findByStatusInAndCreatedAtBefore(

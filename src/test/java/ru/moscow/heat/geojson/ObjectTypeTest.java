@@ -10,7 +10,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Тесты перечисления {@link ObjectType}: парсинг строковых значений
  * {@code object_type} и корректность наборов обязательных атрибутов
- * и допустимых типов геометрии для каждого типа объекта
+ * и допустимых типов геометрии
+ * Состав типов и обязательных атрибутов соответствует актуальному
+ * Техническому приложению ЛЦТ 2026 (раздел 1.1):
+ * <ul>
+ *   <li>{@code source} — без обязательных атрибутов, Point;</li>
+ *   <li>{@code heat_network} — diameter, LineString;</li>
+ *   <li>{@code heat_chamber} — без обязательных атрибутов, Point;</li>
+ *   <li>{@code oks_connection_point} — flow_tph, Point;</li>
+ *   <li>{@code restriction} — restriction_type, линейные и
+ *       полигональные типы геометрии.</li>
+ * </ul>
  */
 class ObjectTypeTest {
 
@@ -25,9 +35,7 @@ class ObjectTypeTest {
             "source,SOURCE",
             "heat_network,HEAT_NETWORK",
             "heat_chamber,HEAT_CHAMBER",
-            "oks_future,OKS_FUTURE",
             "oks_connection_point,OKS_CONNECTION_POINT",
-            "oks_existing,OKS_EXISTING",
             "restriction,RESTRICTION"
     })
     void fromString_parsesAllKnownValues(String input,
@@ -45,7 +53,7 @@ class ObjectTypeTest {
             "SOURCE,SOURCE",
             "Heat_Network,HEAT_NETWORK",
             " heat_chamber ,HEAT_CHAMBER",
-            "OKS_FUTURE,OKS_FUTURE"
+            "OKS_CONNECTION_POINT,OKS_CONNECTION_POINT"
     })
     void fromString_isCaseInsensitiveAndTrims(String input,
                                               ObjectType expected) {
@@ -54,7 +62,7 @@ class ObjectTypeTest {
 
     /**
      * Неизвестные значения, пустая строка, строка из пробелов и
-     * {@code null} дают {@code null} вместо исключения
+     * {@code null} дают {@code null}
      */
     @Test
     void fromString_returnsNullForUnknown() {
@@ -65,78 +73,79 @@ class ObjectTypeTest {
     }
 
     /**
-     * heat_network: обязательны diameter, flow_tph, upstream_object_id;
-     * допустима только LineString
+     * Удаленные из актуальной модели типы не должны резолвиться
      */
     @Test
-    @DisplayName("HEAT_NETWORK required: diameter, flow_tph, "
-            + "upstream_object_id")
+    void fromString_removedTypesReturnNull() {
+        assertThat(ObjectType.fromString("oks_future")).isNull();
+        assertThat(ObjectType.fromString("oks_existing")).isNull();
+    }
+
+    /**
+     * heat_network: обязателен только diameter; допустима только LineString
+     */
+    @Test
+    @DisplayName("HEAT_NETWORK required: diameter")
     void heatNetworkRequired() {
         assertThat(ObjectType.HEAT_NETWORK.getRequiredProperties())
-                .containsExactlyInAnyOrder(
-                        "diameter",
-                        "flow_tph",
-                        "upstream_object_id");
+                .containsExactly("diameter");
         assertThat(ObjectType.HEAT_NETWORK.getAllowedGeometryTypes())
                 .containsExactly("LineString");
     }
 
     /**
-     * Регрессия: heat_chamber не требует {@code upstream_object_id}.
-     * Атрибут относится к участкам сети, а не к камерам
+     * heat_chamber: без обязательных атрибутов; допустима только Point
      */
     @Test
-    @DisplayName("HEAT_CHAMBER required: только diameter")
+    @DisplayName("HEAT_CHAMBER required: пусто")
     void heatChamberRequired() {
         assertThat(ObjectType.HEAT_CHAMBER.getRequiredProperties())
-                .containsExactly("diameter");
+                .isEmpty();
         assertThat(ObjectType.HEAT_CHAMBER.getAllowedGeometryTypes())
                 .containsExactly("Point");
     }
 
     /**
-     * oks_future: обязательны flow_tph и heat_load
+     * oks_connection_point: обязателен flow_tph; допустима только Point
      */
     @Test
-    void oksFutureRequired() {
-        assertThat(ObjectType.OKS_FUTURE.getRequiredProperties())
-                .containsExactlyInAnyOrder("flow_tph", "heat_load");
-    }
-
-    /**
-     * oks_connection_point: обязателен только oks_id
-     */
-    @Test
+    @DisplayName("OKS_CONNECTION_POINT required: flow_tph")
     void oksConnectionPointRequired() {
         assertThat(ObjectType.OKS_CONNECTION_POINT
                 .getRequiredProperties())
-                .containsExactly("oks_id");
+                .containsExactly("flow_tph");
+        assertThat(ObjectType.OKS_CONNECTION_POINT
+                .getAllowedGeometryTypes())
+                .containsExactly("Point");
     }
 
     /**
-     * restriction: обязателен только restriction_type
+     * restriction: обязателен restriction_type; допустимы только
+     * линейные ({@code LineString}, {@code MultiLineString}) и
+     * полигональные ({@code Polygon}, {@code MultiPolygon}) типы
+     * геометрии. Точечные ограничения в актуальной модели
+     * не предусмотрены
      */
     @Test
     void restrictionRequired() {
         assertThat(ObjectType.RESTRICTION.getRequiredProperties())
                 .containsExactly("restriction_type");
+        assertThat(ObjectType.RESTRICTION.getAllowedGeometryTypes())
+                .containsExactlyInAnyOrder(
+                        "LineString",
+                        "MultiLineString",
+                        "Polygon",
+                        "MultiPolygon");
     }
 
     /**
-     * source: обязательных атрибутов нет
+     * source: без обязательных атрибутов; допустима только Point
      */
     @Test
     void sourceRequiredIsEmpty() {
         assertThat(ObjectType.SOURCE.getRequiredProperties())
                 .isEmpty();
-    }
-
-    /**
-     * oks_existing: обязательных атрибутов нет
-     */
-    @Test
-    void oksExistingRequiredIsEmpty() {
-        assertThat(ObjectType.OKS_EXISTING.getRequiredProperties())
-                .isEmpty();
+        assertThat(ObjectType.SOURCE.getAllowedGeometryTypes())
+                .containsExactly("Point");
     }
 }

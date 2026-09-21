@@ -2,6 +2,7 @@ package ru.moscow.heat.geojson.repository;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.locationtech.jts.geom.Geometry;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,11 +16,13 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Интеграционные тесты: сохранение геометрий geom/geom_utm
- * и пространственные запросы PostGIS (bbox, ST_Intersects, ST_DWithin)
+ * Интеграционные тесты сохранения геометрий и пространственных
+ * запросов PostGIS в таблице {@code geo_feature}
  */
 class GeoFeatureSpatialIntegrationTest extends AbstractIntegrationTest {
 
@@ -35,6 +38,17 @@ class GeoFeatureSpatialIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private ObjectMapper objectMapper;
 
+    /**
+     * Создает тестовую фичу с заполненными полями {@code geometry}
+     * (JSONB), {@code geom} (JTS в EPSG:4326) и {@code geomUtm}
+     * (JTS в EPSG:32637)
+     * @param uploadId   идентификатор загрузки
+     * @param featureId  идентификатор фичи
+     * @param objectType строковое значение {@code object_type}
+     * @param geometryJson GeoJSON-геометрия как строка
+     * @return готовая сущность {@link GeoFeature} для сохранения
+     * @throws Exception при разборе GeoJSON
+     */
     private GeoFeature feature(UUID uploadId, String featureId,
                                String objectType, String geometryJson) throws Exception {
         JsonNode geometryNode = objectMapper.readTree(geometryJson);
@@ -52,7 +66,15 @@ class GeoFeatureSpatialIntegrationTest extends AbstractIntegrationTest {
                 .build();
     }
 
+    /**
+     * При сохранении фичи заполняются обе пространственные колонки:
+     * {@code geom} в EPSG:4326 и {@code geom_utm} в EPSG:32637.
+     * Метрические координаты UTM 37N попадают в ожидаемый диапазон
+     * для московских точек
+     * @throws Exception при сохранении или чтении фичи
+     */
     @Test
+    @DisplayName("geom и geom_utm заполняются при сохранении")
     void persistedFeatureHasBothSpatialColumns() throws Exception {
         UUID uploadId = UUID.randomUUID();
         repository.saveAndFlush(feature(uploadId, "p1", "source",
@@ -62,16 +84,23 @@ class GeoFeatureSpatialIntegrationTest extends AbstractIntegrationTest {
                 .filter(f -> f.getUploadId().equals(uploadId))
                 .findFirst().orElseThrow();
 
-        assertNotNull(loaded.getGeom(), "колонка geom должна быть заполнена");
-        assertNotNull(loaded.getGeomUtm(), "колонка geom_utm должна быть заполнена");
+        assertNotNull(loaded.getGeom(),
+                "колонка geom должна быть заполнена");
+        assertNotNull(loaded.getGeomUtm(),
+                "колонка geom_utm должна быть заполнена");
         assertEquals(4326, loaded.getGeom().getSRID());
         assertEquals(32637, loaded.getGeomUtm().getSRID());
-        // Метрические координаты UTM 37N для точки датасета
         assertTrue(loaded.getGeomUtm().getCoordinate().x > 400_000);
         assertTrue(loaded.getGeomUtm().getCoordinate().y > 6_170_000);
     }
 
+    /**
+     * {@code findWithinBbox} возвращает только фичи, попадающие
+     * в заданный ограничивающий прямоугольник, и игнорирует остальные
+     * @throws Exception при сохранении фич
+     */
     @Test
+    @DisplayName("findWithinBbox возвращает только объекты в bbox")
     void findWithinBboxReturnsOnlyInside() throws Exception {
         UUID uploadId = UUID.randomUUID();
         repository.saveAndFlush(feature(uploadId, "in", "source",
@@ -85,7 +114,14 @@ class GeoFeatureSpatialIntegrationTest extends AbstractIntegrationTest {
         assertEquals(List.of("in"), ids(found));
     }
 
+    /**
+     * {@code findWithinDistanceMeters} ищет фичи в радиусе от
+     * заданной точки. Расчет идет в UTM 37N: результат в метрах
+     * не зависит от широты, в отличие от градусов WGS 84
+     * @throws Exception при сохранении фич
+     */
     @Test
+    @DisplayName("findWithinDistanceMeters использует UTM")
     void findWithinDistanceMetersUsesUtm() throws Exception {
         UUID uploadId = UUID.randomUUID();
         repository.saveAndFlush(feature(uploadId, "near", "source",
@@ -100,7 +136,15 @@ class GeoFeatureSpatialIntegrationTest extends AbstractIntegrationTest {
         assertEquals(List.of("near"), ids(found));
     }
 
+    /**
+     * {@code findIntersecting} возвращает фичи, пересекающиеся с
+     * заданной геометрией. {@code findByObjectTypeAndGeometryIntersects}
+     * дополнительно фильтрует по {@code object_type}: для
+     * {@code heat_chamber} находит, для {@code source} - нет
+     * @throws Exception при сохранении фич
+     */
     @Test
+    @DisplayName("Пространственные запросы с фильтром по object_type")
     void findIntersectingAndByObjectType() throws Exception {
         UUID uploadId = UUID.randomUUID();
         repository.saveAndFlush(feature(uploadId, "inside", "heat_chamber",
@@ -111,14 +155,25 @@ class GeoFeatureSpatialIntegrationTest extends AbstractIntegrationTest {
         String polygonWkt = "POLYGON((37.63 55.69, 37.64 55.69, 37.64 55.70, "
                 + "37.63 55.70, 37.63 55.69))";
 
-        assertEquals(List.of("inside"), ids(repository.findIntersecting(uploadId, polygonWkt)));
+        assertEquals(List.of("inside"),
+                ids(repository.findIntersecting(uploadId, polygonWkt)));
         assertEquals(List.of("inside"),
                 ids(repository.findByObjectTypeAndGeometryIntersects(
-                        uploadId, ObjectType.fromString("heat_chamber").name(), polygonWkt)));
+                        uploadId,
+                        ObjectType.fromString("heat_chamber").name(),
+                        polygonWkt)));
         assertTrue(repository.findByObjectTypeAndGeometryIntersects(
-                uploadId, ObjectType.fromString("source").name(), polygonWkt).isEmpty());
+                uploadId,
+                ObjectType.fromString("source").name(),
+                polygonWkt).isEmpty());
     }
 
+    /**
+     * Возвращает отсортированный список {@code feature_id} для
+     * устойчивого сравнения в ассертах
+     * @param features список фич
+     * @return отсортированные идентификаторы
+     */
     private List<String> ids(List<GeoFeature> features) {
         return features.stream()
                 .map(GeoFeature::getFeatureId)

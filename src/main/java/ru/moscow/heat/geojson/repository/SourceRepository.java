@@ -1,5 +1,10 @@
 package ru.moscow.heat.geojson.repository;
 
-public interface SourceRepository extends JpaRepository<SourceEntity, Long> {
+import ru.moscow.heat.geojson.entity.SourceEntity;
 
+/**
+ * Репозиторий источников теплоснабжения
+ */
+public interface SourceRepository
+        extends UploadAwareRepository<SourceEntity> {
 }

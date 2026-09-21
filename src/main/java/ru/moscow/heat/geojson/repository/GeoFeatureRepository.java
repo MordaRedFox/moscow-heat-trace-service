@@ -10,10 +10,7 @@ import java.util.UUID;
 
 /**
  * Репозиторий загруженных объектов GeoJSON. Все операции
- * изолированы по {@code upload_id}.
- *
- * <p>Пространственные запросы написаны нативным SQL с функциями PostGIS
- * и опираются на GIST-индексы по колонкам {@code geom} / {@code geom_utm}.
+ * изолированы по {@code upload_id}
  */
 public interface GeoFeatureRepository
         extends JpaRepository<GeoFeature, Long> {
@@ -32,7 +29,6 @@ public interface GeoFeatureRepository
     /**
      * Объекты, попадающие в ограничивающий прямоугольник (WGS 84).
      * Оператор {@code &&} работает через GIST-индекс по {@code geom}
-     *
      * @param minX/minY/maxX/maxY границы bbox в градусах EPSG:4326
      */
     @Query(value = "SELECT * FROM geo_feature f WHERE f.upload_id = :uploadId "
@@ -58,7 +54,6 @@ public interface GeoFeatureRepository
 
     /**
      * Комбинированный поиск: тип объекта + пересечение с геометрией
-     *
      * @param objectType имя константы enum (значение колонки object_type)
      */
     @Query(value = "SELECT * FROM geo_feature f WHERE f.upload_id = :uploadId "
@@ -71,9 +66,8 @@ public interface GeoFeatureRepository
             @Param("wkt") String wkt);
 
     /**
-     * Объекты в радиусе (метры) от заданной геометрии. Расчёт идёт в UTM 37N
+     * Объекты в радиусе (метры) от заданной геометрии. Расчет идет в UTM 37N
      * через материализованную колонку {@code geom_utm} (GIST + ST_DWithin)
-     *
      * @param wkt          геометрия-центр в EPSG:4326 (WKT)
      * @param radiusMeters радиус поиска в метрах
      */

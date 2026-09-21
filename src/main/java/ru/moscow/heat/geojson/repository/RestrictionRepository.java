@@ -1,6 +1,10 @@
 package ru.moscow.heat.geojson.repository;
 
-public interface RestrictionRepository
-        extends JpaRepository<RestrictionEntity, Long> {
+import ru.moscow.heat.geojson.entity.RestrictionEntity;
 
+/**
+ * Репозиторий пространственных ограничений
+ */
+public interface RestrictionRepository
+        extends UploadAwareRepository<RestrictionEntity> {
 }
