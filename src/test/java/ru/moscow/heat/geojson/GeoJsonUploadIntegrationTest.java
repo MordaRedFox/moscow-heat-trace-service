@@ -53,9 +53,11 @@ class GeoJsonUploadIntegrationTest extends AbstractIntegrationTest {
     void fullCycle_uploadAndPollUntilCompleted() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "s1", "source", "Point", 37.6, 55.75));
+                "s1", "source", "Point",
+                37.6, 55.75));
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "s2", "source", "Point", 37.7, 55.8));
+                "s2", "source", "Point",
+                37.7, 55.8));
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "test.geojson", "application/geo+json",
@@ -104,9 +106,11 @@ class GeoJsonUploadIntegrationTest extends AbstractIntegrationTest {
     void uploadWithValidationErrors_stillCompletes() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "s1", "source", "Point", 37.6, 55.75));
+                "s1", "source", "Point",
+                37.6, 55.75));
         TestGeoJsonFactory.addFeature(c, TestGeoJsonFactory.feature(
-                "bad", "unknown_type", "Point", 37.6, 55.75));
+                "bad", "unknown_type", "Point",
+                37.6, 55.75));
 
         MockMultipartFile file = new MockMultipartFile(
                 "file", "mixed.geojson", "application/geo+json",
