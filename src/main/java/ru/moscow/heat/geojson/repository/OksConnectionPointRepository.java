@@ -1,5 +1,10 @@
 package ru.moscow.heat.geojson.repository;
 
-public interface OksConnectionPointRepository extends JpaRepository<OksConnectionPointEntity, Long> {
+import ru.moscow.heat.geojson.entity.OksConnectionPointEntity;
 
+/**
+ * Репозиторий точек подключения перспективных ОКС
+ */
+public interface OksConnectionPointRepository
+        extends UploadAwareRepository<OksConnectionPointEntity> {
 }

@@ -445,17 +445,22 @@ public class GeoJsonParserService {
         }
         return null;
     }
-
-    /** Проверяет типы известных атрибутов, если они присутствуют в properties */
+        /**
+     * Проверяет типы известных атрибутов, если они присутствуют
+     * в properties. Состав полей соответствует актуальному
+     * Техническому приложению ЛЦТ 2026:
+     * <ul>
+     *   <li>{@code diameter} — целое (heat_network);</li>
+     *   <li>{@code flow_tph} — число (oks_connection_point);</li>
+     *   <li>{@code restriction_type} — строка (restriction).</li>
+     * </ul>
+     */
     private List<String> validateAttributeTypes(JsonNode properties) {
         List<String> errors = new ArrayList<>();
         checkString(properties, "id", errors);
         checkString(properties, "object_type", errors);
         checkInteger(properties, "diameter", errors);
         checkNumber(properties, "flow_tph", errors);
-        checkNumber(properties, "heat_load", errors);
-        checkString(properties, "upstream_object_id", errors);
-        checkString(properties, "oks_id", errors);
         checkString(properties, "restriction_type", errors);
         return errors;
     }

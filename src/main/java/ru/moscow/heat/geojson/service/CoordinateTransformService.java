@@ -12,12 +12,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Трансформация координат между WGS 84 (EPSG:4326) и UTM zone 37N (EPSG:32637)
- * на базе Proj4J. Все метрические расчёты (длины, расстояния, буферы)
- * выполняются в EPSG:32637 согласно техническому приложению.
- *
- * <p>Трансформация выполняется на стороне Java, чтобы не дёргать БД
- * при батчевой вставке и чтобы её можно было покрыть unit-тестами
- * без поднятия PostGIS.
+ * на базе Proj4J. Все метрические расчеты (длины, расстояния, буферы)
+ * выполняются в EPSG:32637 согласно техническому приложению
  */
 @Service
 public class CoordinateTransformService {
@@ -54,7 +50,6 @@ public class CoordinateTransformService {
 
     /**
      * Трансформация одиночной точки
-     *
      * @param lon долгота, град (EPSG:4326)
      * @param lat широта, град (EPSG:4326)
      * @return массив {easting, northing} в метрах EPSG:32637
@@ -65,12 +60,14 @@ public class CoordinateTransformService {
         return new double[]{dst.x, dst.y};
     }
 
-    private Geometry transform(Geometry source, CoordinateTransform transform, int targetSrid) {
+    private Geometry transform(Geometry source, CoordinateTransform transform,
+                                int targetSrid) {
         Geometry copy = source.copy();
         copy.apply(new CoordinateSequenceFilter() {
             @Override
             public void filter(CoordinateSequence seq, int i) {
-                ProjCoordinate src = new ProjCoordinate(seq.getX(i), seq.getY(i));
+                ProjCoordinate src = new ProjCoordinate(
+                    seq.getX(i), seq.getY(i));
                 ProjCoordinate dst = new ProjCoordinate();
                 transform.transform(src, dst);
                 seq.setOrdinate(i, CoordinateSequence.X, dst.x);
