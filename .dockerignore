@@ -1,5 +1,26 @@
+# Git и IDE
 .git
+.gitignore
+.gitattributes
 .idea
+*.iml
+.vscode
+
+# Сборка Maven
 target
+.mvn
+mvnw
+mvnw.cmd
+
+# Логи и системное
 *.log
+
+# Devcontainer (не нужен в образе)
 .devcontainer
+
+# Документация и compose-файлы (нужны только снаружи)
+README.md
+docker-compose.yml
+docker-compose.*.yml
+Dockerfile
+.dockerignore

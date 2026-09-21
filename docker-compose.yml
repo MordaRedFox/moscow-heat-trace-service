@@ -1,23 +1,29 @@
+version: "3.8"
+
 services:
+  # PostgreSQL с PostGIS - обязателен для хранения geom/geom_utm
+  # Обычный postgres НЕ подойдет: нет расширения postgis
   postgres:
-    image: postgis/postgis:16-3.4   # обычный postgres НЕ подойдёт: нет PostGIS
+    image: postgis/postgis:16-3.4
     container_name: heat-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: heat
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: heat_trace
+      POSTGRES_USER: heat
+      POSTGRES_PASSWORD: heat
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d heat"]  # было "-d path" — опечатка
+      test: ["CMD-SHELL", "pg_isready -U heat -d heat_trace"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 10s
+    # Порт наружу публикуем для отладки через psql с хоста
+    ports:
+      - "5432:5432"
 
+  # Spring Boot-приложение
   app:
     build:
       context: .
@@ -28,34 +34,18 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/heat
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/heat_trace
+      SPRING_DATASOURCE_USERNAME: heat
+      SPRING_DATASOURCE_PASSWORD: heat
+    volumes:
+      # Временная директория для multipart и файлов загрузки
+      # до 3 ГБ (heat.upload.temp-dir = ${java.io.tmpdir}/heat-uploads).
+      # Монтируем том, чтобы файлы не упирались в эфемерный /tmp
+      # контейнера и не терялись при рестарте
+      - heat_uploads:/var/tmp/heat
     ports:
       - "8080:8080"
 
 volumes:
   postgres_data:
-"""services:
-
-  # PostgreSQL
-  postgres:
-    image: postgres:18
-#    restart: unless-stopped
-    environment:
-      POSTGRES_DB: heat
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-#    volumes:
-#      - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-#    healthcheck:
-#      test: ["CMD-SHELL", "pg_isready -U postgres -d path"]
-#      interval: 5s
-#      timeout: 5s
-#      retries: 10
-#      start_period: 10s
-#
-#volumes:
-#  postgres_data:"""
+  heat_uploads:
