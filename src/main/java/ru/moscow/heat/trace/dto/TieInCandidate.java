@@ -1,5 +1,6 @@
 package ru.moscow.heat.trace.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -34,6 +35,7 @@ public class TieInCandidate {
     private final String existingChamberId;
 
     /** Точка присоединения в координатах WGS 84 (EPSG:4326) */
+    @JsonSerialize(using = PointGeoJsonSerializer.class)
     private final Point tieInPoint;
 
     /**
