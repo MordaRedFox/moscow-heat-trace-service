@@ -13,29 +13,69 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-@DisplayName("Тестирование нормативного справочника ДУ (DiameterTable)")
+/**
+ * Тесты справочника {@link DiameterTable}, соответствующего
+ * Таблице 1 Технического приложения ЛЦТ 2026
+ * <p>Проверяется:
+ * <ul>
+ *   <li>полнота и порядок нормативных диаметров от 50 до 1400 мм;</li>
+ *   <li>точное соответствие всех числовых значений (пропускная
+ *       способность, предельная длина, стоимость, габариты пары
+ *       труб) строкам Таблицы 1;</li>
+ *   <li>подбор минимального ДУ по расходу и по паре
+ *       «расход + предельная длина»;</li>
+ *   <li>граничные и негативные сценарии: отрицательный расход,
+ *       превышение максимума, отсутствие ДУ в таблице;</li>
+ *   <li>переход к следующему диаметру и определение наибольшего
+ *       ДУ из набора примыканий.</li>
+ * </ul>
+ */
+@DisplayName("Тестирование справочника ДУ (DiameterTable)")
 class DiameterTableTest {
 
     private DiameterTable table;
 
+    /**
+     * Создает свежий экземпляр справочника перед каждым тестом.
+     * Справочник без состояния, но изоляция упрощает диагностику
+     */
     @BeforeEach
     void setUp() {
         table = new DiameterTable();
     }
 
+    /**
+     * Справочник содержит ровно 18 нормативных диаметров,
+     * упорядоченных по возрастанию
+     */
     @Test
-    @DisplayName("Таблица содержит ровно 18 нормативных диаметров от 50 до 1400 мм")
+    @DisplayName("Таблица содержит 18 диаметров от 50 до 1400 мм")
     void shouldContainAll18CanonicalDiameters() {
         List<DiameterSpec> all = table.getAll();
         assertThat(all).hasSize(18);
 
-        int[] expectedDiameters = {50, 65, 80, 100, 125, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000, 1200, 1400};
-        for (int i = 0; i < expectedDiameters.length; i++) {
-            assertThat(all.get(i).getDiameterMm()).isEqualTo(expectedDiameters[i]);
+        int[] expected = {
+                50, 65, 80, 100, 125, 150, 200, 250, 300, 400,
+                500, 600, 700, 800, 900, 1000, 1200, 1400
+        };
+        for (int i = 0; i < expected.length; i++) {
+            assertThat(all.get(i).getDiameterMm())
+                    .isEqualTo(expected[i]);
         }
     }
 
-    @ParameterizedTest(name = "ДУ={0}: пропускная={1}, длина={2}, цена={3}, ширина={4}, высота={5}")
+    /**
+     * Все числовые значения каждой строки Таблицы 1 совпадают
+     * с эталоном технического приложения
+     * @param mm       условный диаметр, мм
+     * @param capacity пропускная способность пары, т/ч
+     * @param length   предельная длина участка, м
+     * @param cost     стоимость строительства, руб./м
+     * @param width    расчётная ширина пары труб, м
+     * @param height   расчётная высота пары труб, м
+     */
+    @ParameterizedTest(name = "ДУ={0}: пропускная={1}, длина={2}, "
+            + "цена={3}, ширина={4}, высота={5}")
     @CsvSource({
             "50, 3.5, 181, 74023.0, 0.400, 0.125",
             "65, 8.3, 245, 78631.0, 0.430, 0.140",
@@ -56,8 +96,13 @@ class DiameterTableTest {
             "1200, 15012.8, 9288, 428074.0, 3.100, 1.425",
             "1400, 22501.9, 11276, 683417.0, 3.450, 1.600"
     })
-    @DisplayName("Сверка числовых значений Таблицы 1 tp-tables.md")
-    void shouldMatchCanonicalTable1Values(int mm, double capacity, double length, double cost, double width, double height) {
+    @DisplayName("Сверка числовых значений Таблицы 1 ТП")
+    void shouldMatchCanonicalTable1Values(int mm,
+                                          double capacity,
+                                          double length,
+                                          double cost,
+                                          double width,
+                                          double height) {
         Optional<DiameterSpec> specOpt = table.findByDiameter(mm);
         assertThat(specOpt).isPresent();
         DiameterSpec spec = specOpt.get();
@@ -68,6 +113,9 @@ class DiameterTableTest {
         assertThat(spec.getPairHeightM()).isEqualTo(height);
     }
 
+    /**
+     * Диаметр, которого нет в таблице, не резолвится
+     */
     @Test
     @DisplayName("Поиск по несуществующему ДУ возвращает empty")
     void shouldReturnEmptyForUnknownDiameter() {
@@ -75,99 +123,146 @@ class DiameterTableTest {
         assertThat(table.findByDiameter(1500)).isEmpty();
     }
 
+    /**
+     * Подбор минимального ДУ по расходу: проверяются точная
+     * граница, чуть выше границы, верхняя граница таблицы и
+     * нулевой расход
+     */
     @Test
-    @DisplayName("Подбор минимального ДУ по расходу (граничные значения)")
+    @DisplayName("Подбор минимального ДУ по расходу (границы)")
     void shouldFindMinDiameterForFlow() {
-        // Точно на границе 3.5 т/ч -> ДУ 50
-        assertThat(table.minDiameterForFlow(3.5).getDiameterMm()).isEqualTo(50);
-        // Чуть больше 3.5 т/ч -> ДУ 65
-        assertThat(table.minDiameterForFlow(3.5001).getDiameterMm()).isEqualTo(65);
-        // Точно на границе 22501.9 т/ч -> ДУ 1400
-        assertThat(table.minDiameterForFlow(22501.9).getDiameterMm()).isEqualTo(1400);
-        // Нулевой расход -> минимальный ДУ 50
-        assertThat(table.minDiameterForFlow(0.0).getDiameterMm()).isEqualTo(50);
+        assertThat(table.minDiameterForFlow(3.5).getDiameterMm())
+                .isEqualTo(50);
+        assertThat(table.minDiameterForFlow(3.5001).getDiameterMm())
+                .isEqualTo(65);
+        assertThat(table.minDiameterForFlow(22501.9).getDiameterMm())
+                .isEqualTo(1400);
+        assertThat(table.minDiameterForFlow(0.0).getDiameterMm())
+                .isEqualTo(50);
     }
 
+    /**
+     * Расход выше максимальной пропускной способности таблицы
+     * не может быть покрыт ни одним ДУ
+     */
     @Test
-    @DisplayName("Превышение максимального расхода вызывает исключение")
+    @DisplayName("Превышение максимального расхода — исключение")
     void shouldThrowWhenFlowExceedsMaximum() {
         assertThatThrownBy(() -> table.minDiameterForFlow(22502.0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("превышает максимальную пропускную способность");
+                .hasMessageContaining(
+                        "превышает максимальную пропускную");
     }
 
+    /**
+     * Отрицательный расход - некорректный вход
+     */
     @Test
-    @DisplayName("Отрицательный расход вызывает исключение")
+    @DisplayName("Отрицательный расход — исключение")
     void shouldThrowWhenFlowIsNegative() {
         assertThatThrownBy(() -> table.minDiameterForFlow(-1.0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("не может быть отрицательным");
     }
 
+    /**
+     * Подбор минимального ДУ одновременно по расходу и
+     * предельной длине: ДУ 50 не проходит по длине, поэтому
+     * выбирается следующий подходящий
+     */
     @Test
-    @DisplayName("Подбор минимального ДУ по расходу и предельной длине")
+    @DisplayName("Подбор ДУ по расходу и предельной длине")
     void shouldFindMinDiameterForFlowAndLength() {
-        // Расход 2.0 т/ч укладывается в ДУ 50 (до 3.5), но длина 200 м превышает 181 м -> должен выбрать ДУ 65 (до 245 м)
-        DiameterSpec spec1 = table.minDiameterForFlowAndLength(2.0, 200.0);
+        DiameterSpec spec1 = table
+                .minDiameterForFlowAndLength(2.0, 200.0);
         assertThat(spec1.getDiameterMm()).isEqualTo(65);
 
-        // Расход 10.0 т/ч требует ДУ 80 (до 13.2), длина 100 м укладывается в ДУ 80 (до 327 м) -> ДУ 80
-        DiameterSpec spec2 = table.minDiameterForFlowAndLength(10.0, 100.0);
+        DiameterSpec spec2 = table
+                .minDiameterForFlowAndLength(10.0, 100.0);
         assertThat(spec2.getDiameterMm()).isEqualTo(80);
 
-        // Максимальные допустимые параметры таблицы
-        DiameterSpec maxSpec = table.minDiameterForFlowAndLength(22501.9, 11276.0);
+        DiameterSpec maxSpec = table
+                .minDiameterForFlowAndLength(22501.9, 11276.0);
         assertThat(maxSpec.getDiameterMm()).isEqualTo(1400);
     }
 
+    /**
+     * Если длина превышает предельную даже для максимального ДУ,
+     * метод бросает исключение
+     */
     @Test
-    @DisplayName("Превышение максимальной длины при подходящем расходе вызывает исключение")
+    @DisplayName("Превышение максимальной длины — исключение")
     void shouldThrowWhenLengthExceedsMaximum() {
-        assertThatThrownBy(() -> table.minDiameterForFlowAndLength(10.0, 12000.0))
+        assertThatThrownBy(() -> table
+                .minDiameterForFlowAndLength(10.0, 12000.0))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Не найден ДУ");
     }
 
+    /**
+     * Переход к следующему диаметру по нормативной шкале
+     */
     @Test
-    @DisplayName("Переход к следующему диаметру (nextDiameter)")
+    @DisplayName("Переход к следующему диаметру")
     void shouldReturnNextDiameter() {
         DiameterSpec d50 = table.findByDiameter(50).orElseThrow();
-        assertThat(table.nextDiameter(d50).getDiameterMm()).isEqualTo(65);
+        assertThat(table.nextDiameter(d50).getDiameterMm())
+                .isEqualTo(65);
 
-        DiameterSpec d1200 = table.findByDiameter(1200).orElseThrow();
-        assertThat(table.nextDiameter(d1200).getDiameterMm()).isEqualTo(1400);
+        DiameterSpec d1200 = table.findByDiameter(1200)
+                .orElseThrow();
+        assertThat(table.nextDiameter(d1200).getDiameterMm())
+                .isEqualTo(1400);
     }
 
+    /**
+     * После максимального диаметра следующий недоступен
+     */
     @Test
-    @DisplayName("Попытка получить следующий после максимального (1400) вызывает IllegalStateException")
+    @DisplayName("nextDiameter после 1400 — IllegalStateException")
     void shouldThrowIllegalStateExceptionOnNextAfterMax() {
-        DiameterSpec d1400 = table.findByDiameter(1400).orElseThrow();
+        DiameterSpec d1400 = table.findByDiameter(1400)
+                .orElseThrow();
         assertThatThrownBy(() -> table.nextDiameter(d1400))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("уже является максимальным");
     }
 
+    /**
+     * {@code nextDiameter(null)} - некорректный вход
+     */
     @Test
-    @DisplayName("nextDiameter(null) вызывает IllegalArgumentException")
+    @DisplayName("nextDiameter(null) — IllegalArgumentException")
     void shouldThrowOnNullInNextDiameter() {
         assertThatThrownBy(() -> table.nextDiameter(null))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
+    /**
+     * {@code largestOf} определяет наибольший ДУ из набора
+     * примыкающих участков - используется для ДУ и стоимости
+     * новой тепловой камеры
+     */
     @Test
-    @DisplayName("largestOf определяет наибольший ДУ из набора примыканий")
+    @DisplayName("largestOf выбирает наибольший ДУ")
     void shouldFindLargestDiameterFromCollection() {
-        DiameterSpec largest = table.largestOf(List.of(50, 200, 125, 80));
+        DiameterSpec largest = table.largestOf(
+                List.of(50, 200, 125, 80));
         assertThat(largest.getDiameterMm()).isEqualTo(200);
 
         DiameterSpec single = table.largestOf(List.of(1400));
         assertThat(single.getDiameterMm()).isEqualTo(1400);
     }
 
+    /**
+     * {@code largestOf} отклоняет пустую коллекцию, {@code null}
+     * и диаметры, отсутствующие в нормативной таблице
+     */
     @Test
-    @DisplayName("largestOf бросает исключение на пустой или некорректной коллекции")
+    @DisplayName("largestOf на некорректной коллекции — исключение")
     void shouldThrowOnInvalidCollectionInLargestOf() {
-        assertThatThrownBy(() -> table.largestOf(Collections.emptyList()))
+        assertThatThrownBy(() -> table.largestOf(
+                Collections.emptyList()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("не может быть пустой");
 
@@ -176,6 +271,7 @@ class DiameterTableTest {
 
         assertThatThrownBy(() -> table.largestOf(List.of(100, 9999)))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("отсутствует в нормативной таблице");
+                .hasMessageContaining(
+                        "отсутствует в нормативной таблице");
     }
 }

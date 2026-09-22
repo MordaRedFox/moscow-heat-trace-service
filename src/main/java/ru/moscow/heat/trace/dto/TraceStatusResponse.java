@@ -11,7 +11,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 /**
- * Ответ с текущим статусом задачи трассировки.
+ * Ответ с текущим статусом задачи трассировки
  */
 @Getter
 @ToString

@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Сервис управления сессиями трассировки (заглушка для Итерации 3).
- * Хранилище сессий в оперативной памяти (ConcurrentHashMap).
+ * Хранилище сессий в оперативной памяти (ConcurrentHashMap)
  */
 @Service
 public class TraceService {
@@ -25,20 +25,20 @@ public class TraceService {
     private final Map<UUID, TraceStatusResponse> sessions = new ConcurrentHashMap<>();
 
     public TraceService(UploadSessionRepository uploadSessionRepository) {
-        this.uploadSessionRepository = Objects.requireNonNull(uploadSessionRepository,
-                "UploadSessionRepository must not be null");
+        this.uploadSessionRepository = Objects.requireNonNull(
+            uploadSessionRepository, "UploadSessionRepository must not be null");
     }
 
     /**
-     * Создает новую сессию трассировки для существующей загрузки uploadId.
-     *
+     * Создает новую сессию трассировки для существующей загрузки uploadId
      * @param uploadId идентификатор загруженного набора данных
      * @return TraceAcceptedResponse со сгенерированным traceId и statusUrl
      * @throws UploadNotFoundException если uploadId не найден в базе данных
      */
     public TraceAcceptedResponse createTraceSession(UUID uploadId) {
         if (uploadId == null || !uploadSessionRepository.existsById(uploadId)) {
-            throw new UploadNotFoundException("Сессия загрузки с id=" + uploadId + " не найдена");
+            throw new UploadNotFoundException(
+                "Сессия загрузки с id=" + uploadId + " не найдена");
         }
 
         UUID traceId = UUID.randomUUID();
@@ -53,8 +53,7 @@ public class TraceService {
     }
 
     /**
-     * Получает текущий статус сессии трассировки по traceId.
-     *
+     * Получает текущий статус сессии трассировки по traceId
      * @param traceId идентификатор задачи трассировки
      * @return TraceStatusResponse
      * @throws TraceNotFoundException если задача с таким traceId отсутствует

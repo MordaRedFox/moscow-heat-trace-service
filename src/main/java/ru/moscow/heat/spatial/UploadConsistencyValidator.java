@@ -11,7 +11,7 @@ import java.util.*;
  * Сервис валидации консистентности загруженного набора геоданных.
  * Выполняет комплексную проверку сессии загрузки перед началом трассировки:
  * - Критические ошибки (блокируют трассировку: valid = false);
- * - Предупреждения (фиксируют некритичные отклонения: valid = true).
+ * - Предупреждения (фиксируют некритичные отклонения: valid = true)
  */
 @Service
 public class UploadConsistencyValidator {
@@ -41,15 +41,15 @@ public class UploadConsistencyValidator {
     }
 
     /**
-     * Выполняет проверку консистентности для указанной сессии загрузки.
-     *
+     * Выполняет проверку консистентности для указанной сессии загрузки
      * @param uploadId идентификатор сессии
      * @return отчет о валидации ConsistencyReport
      */
     @Transactional(readOnly = true)
     public ConsistencyReport validate(UUID uploadId) {
         if (uploadId == null) {
-            return new ConsistencyReport(List.of("Идентификатор загрузки uploadId не может быть null"), List.of());
+            return new ConsistencyReport(List.of(
+                "Идентификатор загрузки uploadId не может быть null"), List.of());
         }
 
         List<String> errors = new ArrayList<>();

@@ -10,7 +10,7 @@ import lombok.ToString;
 import java.util.UUID;
 
 /**
- * Ответ при успешном приеме задачи трассировки (HTTP 202 Accepted).
+ * Ответ при успешном приеме задачи трассировки (HTTP 202 Accepted)
  */
 @Getter
 @ToString
