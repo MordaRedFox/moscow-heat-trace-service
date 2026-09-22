@@ -7,7 +7,7 @@ import lombok.ToString;
 /**
  * Неизменяемая спецификация условного диаметра теплосети (ДУ).
  * Соответствует строке Таблицы 1 Технического приложения ЛЦТ-2026.
- * Java 11: класс неизменяемый (final поля, геттеры, equals/hashCode/toString).
+ * Java 11: класс неизменяемый (final поля, геттеры, equals/hashCode/toString)
  */
 @Getter
 @ToString

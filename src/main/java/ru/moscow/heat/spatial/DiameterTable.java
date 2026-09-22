@@ -8,7 +8,7 @@ import java.util.stream.Collectors;
 /**
  * Нормативный справочник условных диаметров тепловых сетей (ДУ).
  * Загружает и предоставляет данные Таблицы 1 Технического приложения ЛЦТ-2026.
- * Все числовые значения строго синхронизированы с tp-tables.md.
+ * Все числовые значения строго синхронизированы с tp-tables.md
  */
 @Component
 public class DiameterTable {
@@ -49,33 +49,36 @@ public class DiameterTable {
     }
 
     /**
-     * Возвращает неизменяемый список всех спецификаций ДУ, отсортированный по возрастанию диаметра.
+     * Возвращает неизменяемый список всех спецификаций ДУ,
+     * отсортированный по возрастанию диаметра
      */
     public List<DiameterSpec> getAll() {
         return specs;
     }
 
     /**
-     * Поиск спецификации по точной величине условного диаметра в мм.
-     *
+     * Поиск спецификации по точной величине условного диаметра в мм
      * @param mm диаметр в миллиметрах (например, 100, 500)
-     * @return Optional со спецификацией или empty, если такого диаметра нет в таблице
+     * @return Optional со спецификацией или empty,
+     *         если такого диаметра нет в таблице
      */
     public Optional<DiameterSpec> findByDiameter(int mm) {
         return Optional.ofNullable(byDiameterMap.get(mm));
     }
 
     /**
-     * Выбирает минимальный ДУ, пропускная способность которого достаточна для заданного расхода.
-     *
+     * Выбирает минимальный ДУ, пропускная способность которого
+     * достаточна для заданного расхода
      * @param flowTph расчетный расход теплоносителя, т/ч
      * @return минимальный подходящий DiameterSpec
-     * @throws IllegalArgumentException если расход превышает максимальную пропускную способность (22501.9 т/ч)
-     *                                  или является отрицательным
+     * @throws IllegalArgumentException если расход превышает
+     *         максимальную пропускную способность (22501.9 т/ч)
+     *         или является отрицательным
      */
     public DiameterSpec minDiameterForFlow(double flowTph) {
         if (flowTph < 0) {
-            throw new IllegalArgumentException("Расчетный расход не может быть отрицательным: " + flowTph);
+            throw new IllegalArgumentException(
+                    "Расчетный расход не может быть отрицательным: " + flowTph);
         }
         for (DiameterSpec spec : specs) {
             if (spec.getCapacityTph() >= flowTph) {
@@ -83,76 +86,98 @@ public class DiameterTable {
             }
         }
         throw new IllegalArgumentException(String.format(
-                "Расход %.2f т/ч превышает максимальную пропускную способность таблицы (22501.9 т/ч)", flowTph));
+                "Расход %.2f т/ч превышает максимальную пропускную "
+                        + "способность таблицы (22501.9 т/ч)",
+                flowTph));
     }
 
     /**
-     * Выбирает минимальный ДУ, одновременно удовлетворяющий расчетному расходу и предельной длине участка.
-     * Ключевой метод подбора диаметра по правилам раздела 2.3 Технического приложения.
-     *
+     * Выбирает минимальный ДУ, одновременно удовлетворяющий
+     * расчетному расходу и предельной длине участка.
+     * Ключевой метод подбора диаметра по правилам раздела 2.3
+     * Технического приложения
      * @param flowTph расчетный расход, т/ч
      * @param lengthM длина непрерывного участка сети, м
      * @return минимальный подходящий DiameterSpec
-     * @throws IllegalArgumentException если параметры отрицательные или ни один ДУ из таблицы
-     *                                  не удовлетворяет одновременно обоим условиям
+     * @throws IllegalArgumentException если параметры
+     *         отрицательные или ни один ДУ из таблицы
+     *         не удовлетворяет одновременно обоим условиям
      */
-    public DiameterSpec minDiameterForFlowAndLength(double flowTph, double lengthM) {
+    public DiameterSpec minDiameterForFlowAndLength(
+            double flowTph, double lengthM) {
         if (flowTph < 0 || lengthM < 0) {
             throw new IllegalArgumentException(String.format(
-                    "Параметры не могут быть отрицательными: flowTph=%.2f, lengthM=%.2f", flowTph, lengthM));
+                    "Параметры не могут быть отрицательными: "
+                            + "flowTph=%.2f, lengthM=%.2f",
+                    flowTph, lengthM));
         }
         for (DiameterSpec spec : specs) {
-            if (spec.getCapacityTph() >= flowTph && spec.getMaxLengthM() >= lengthM) {
+            if (spec.getCapacityTph() >= flowTph
+                    && spec.getMaxLengthM() >= lengthM) {
                 return spec;
             }
         }
         throw new IllegalArgumentException(String.format(
-                "Не найден ДУ для расхода %.2f т/ч и длины %.2f м (максимум таблицы: 22501.9 т/ч и 11276 м)",
+                "Не найден ДУ для расхода %.2f т/ч и длины %.2f м "
+                        + "(максимум таблицы: 22501.9 т/ч и 11276 м)",
                 flowTph, lengthM));
     }
 
     /**
      * Возвращает следующий по величине условный диаметр.
-     * Используется при невозможности удовлетворить предельную длину текущим диаметром.
-     *
+     * Используется при невозможности удовлетворить предельную
+     * длину текущим диаметром
      * @param current текущая спецификация ДУ
      * @return следующая спецификация ДУ
-     * @throws IllegalArgumentException если current == null или отсутствует в таблице
-     * @throws IllegalStateException    если current уже является максимальным диаметром (1400 мм)
+     * @throws IllegalArgumentException если current == null
+     *         или отсутствует в таблице
+     * @throws IllegalStateException если current уже
+     *         является максимальным диаметром (1400 мм)
      */
     public DiameterSpec nextDiameter(DiameterSpec current) {
         if (current == null) {
-            throw new IllegalArgumentException("Текущая спецификация ДУ не может быть null");
+            throw new IllegalArgumentException(
+                    "Текущая спецификация ДУ не может быть null");
         }
         int index = specs.indexOf(current);
         if (index == -1) {
-            throw new IllegalArgumentException("Диаметр " + current.getDiameterMm() + " отсутствует в нормативной таблице");
+            throw new IllegalArgumentException(
+                    "Диаметр " + current.getDiameterMm()
+                            + " отсутствует в нормативной таблице");
         }
         if (index == specs.size() - 1) {
-            throw new IllegalStateException("Диаметр " + current.getDiameterMm() + " мм уже является максимальным");
+            throw new IllegalStateException(
+                    "Диаметр " + current.getDiameterMm()
+                            + " мм уже является максимальным");
         }
         return specs.get(index + 1);
     }
 
     /**
-     * Определяет спецификацию для наибольшего ДУ из переданной коллекции диаметров примыкающих участков.
-     * Применяется для определения ДУ и стоимости тепловой камеры по разделу 3.2.
-     *
+     * Определяет спецификацию для наибольшего ДУ из переданной
+     * коллекции диаметров примыкающих участков.
+     * Применяется для определения ДУ и стоимости тепловой камеры
+     * по разделу 3.2
      * @param diameters коллекция диаметров примыкающих участков в мм
      * @return DiameterSpec для максимального диаметра из коллекции
-     * @throws IllegalArgumentException если коллекция пуста, содержит null или неизвестный диаметр
+     * @throws IllegalArgumentException если коллекция пуста,
+     *         содержит null или неизвестный диаметр
      */
     public DiameterSpec largestOf(Collection<Integer> diameters) {
         if (diameters == null || diameters.isEmpty()) {
-            throw new IllegalArgumentException("Коллекция диаметров не может быть пустой или null");
+            throw new IllegalArgumentException(
+                    "Коллекция диаметров не может быть пустой или null");
         }
         int max = -1;
         for (Integer d : diameters) {
             if (d == null) {
-                throw new IllegalArgumentException("Коллекция диаметров содержит null");
+                throw new IllegalArgumentException(
+                        "Коллекция диаметров содержит null");
             }
             if (!byDiameterMap.containsKey(d)) {
-                throw new IllegalArgumentException("Диаметр " + d + " мм отсутствует в нормативной таблице");
+                throw new IllegalArgumentException(
+                        "Диаметр " + d
+                                + " мм отсутствует в нормативной таблице");
             }
             if (d > max) {
                 max = d;

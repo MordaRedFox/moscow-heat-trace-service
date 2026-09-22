@@ -6,7 +6,7 @@ import java.util.*;
 
 /**
  * Нормативный реестр правил пространственных ограничений.
- * Загружает и предоставляет данные Таблицы 2 Технического приложения ЛЦТ-2026.
+ * Загружает и предоставляет данные Таблицы 2 Технического приложения ЛЦТ-2026
  */
 @Component
 public class RestrictionRuleRegistry {
@@ -66,10 +66,9 @@ public class RestrictionRuleRegistry {
     }
 
     /**
-     * Возвращает нормативное правило для заданного типа ограничения.
-     *
+     * Возвращает нормативное правило для заданного типа ограничения
      * @param restrictionType строковый тип (road, water, park и т.п.)
-     * @return Optional с правилом, либо empty, если тип неизвестен (допустимо по ТЗ)
+     * @return Optional с правилом, либо empty, если тип неизвестен
      */
     public Optional<RestrictionRule> ruleFor(String restrictionType) {
         if (restrictionType == null) {
@@ -84,15 +83,15 @@ public class RestrictionRuleRegistry {
      * в зависимости от условного диаметра (ДУ) прокладываемой трубы:
      * - ДУ < 500 мм  -> 5 м;
      * - ДУ 500..800 мм -> 7 м;
-     * - ДУ >= 900 мм -> 9 м.
-     *
+     * - ДУ >= 900 мм -> 9 м
      * @param diameterMm условный диаметр, мм
      * @return нормативный отступ, м (целое число 5, 7 или 9)
      * @throws IllegalArgumentException если диаметр <= 0
      */
     public int minDistanceForDiameter(int diameterMm) {
         if (diameterMm <= 0) {
-            throw new IllegalArgumentException("Условный диаметр должен быть положительным: " + diameterMm);
+            throw new IllegalArgumentException(
+                "Условный диаметр должен быть положительным: " + diameterMm);
         }
         if (diameterMm < 500) {
             return 5;
@@ -104,7 +103,7 @@ public class RestrictionRuleRegistry {
     }
 
     /**
-     * Возвращает все зарегистрированные правила.
+     * Возвращает все зарегистрированные правила
      */
     public Collection<RestrictionRule> getAllRules() {
         return rules.values();

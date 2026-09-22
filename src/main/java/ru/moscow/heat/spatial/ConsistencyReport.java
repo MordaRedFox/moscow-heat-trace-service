@@ -9,7 +9,7 @@ import java.util.List;
 
 /**
  * Неизменяемый отчет о валидации консистентности набора данных загрузки.
- * Java 11: final поля, геттеры, unmodifiable списки, equals/hashCode/toString.
+ * Java 11: final поля, геттеры, unmodifiable списки, equals/hashCode/toString
  */
 @Getter
 @ToString

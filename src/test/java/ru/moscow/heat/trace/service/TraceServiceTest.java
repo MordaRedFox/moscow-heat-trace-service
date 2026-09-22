@@ -19,8 +19,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
+/**
+ * Модульные тесты сервиса {@link TraceService}
+ * <p>Используется {@link MockitoExtension}:
+ * {@link UploadSessionRepository} подменяется моком. Сессии
+ * трассировки хранятся в памяти самого сервиса, поэтому
+ * {@code TraceService} создается через конструктор с моком
+ * репозитория
+ * <p>Проверяются:
+ * <ul>
+ *   <li>успешное создание сессии для существующей загрузки,
+ *       включая регистрацию в хранилище и корректный URL
+ *       статуса;</li>
+ *   <li>отказ с {@link UploadNotFoundException} для
+ *       несуществующей загрузки;</li>
+ *   <li>отказ с {@link TraceNotFoundException} при опросе
+ *       статуса неизвестной задачи.</li>
+ * </ul>
+ */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Модульное тестирование сервиса трассировки (TraceService)")
+@DisplayName("Модульные тесты сервиса трассировки (TraceService)")
 class TraceServiceTest {
 
     @Mock
@@ -28,45 +46,73 @@ class TraceServiceTest {
 
     private TraceService traceService;
 
+    /**
+     * Создает сервис с моком репозитория перед каждым тестом
+     */
     @BeforeEach
     void setUp() {
         traceService = new TraceService(uploadSessionRepository);
     }
 
+    /**
+     * Создание сессии для существующей загрузки проходит
+     * успешно: возвращается непустой идентификатор задачи,
+     * URL статуса формируется по идентификатору, а сама
+     * сессия доступна через {@code getTraceStatus} со статусом
+     * {@code NOT_IMPLEMENTED}
+     */
     @Test
-    @DisplayName("Успешное создание сессии трассировки для существующей загрузки")
+    @DisplayName("Создание сессии для существующей загрузки")
     void shouldCreateTraceSessionWhenUploadExists() {
         UUID uploadId = UUID.randomUUID();
-        when(uploadSessionRepository.existsById(uploadId)).thenReturn(true);
+        when(uploadSessionRepository.existsById(uploadId))
+                .thenReturn(true);
 
-        TraceAcceptedResponse response = traceService.createTraceSession(uploadId);
+        TraceAcceptedResponse response =
+                traceService.createTraceSession(uploadId);
 
         assertThat(response.getTraceId()).isNotNull();
-        assertThat(response.getStatusUrl()).isEqualTo("/api/trace/" + response.getTraceId());
+        assertThat(response.getStatusUrl())
+                .isEqualTo("/api/trace/" + response.getTraceId());
 
-        TraceStatusResponse status = traceService.getTraceStatus(response.getTraceId());
-        assertThat(status.getTraceId()).isEqualTo(response.getTraceId());
-        assertThat(status.getStatus()).isEqualTo(TraceStatus.NOT_IMPLEMENTED);
+        TraceStatusResponse status = traceService
+                .getTraceStatus(response.getTraceId());
+        assertThat(status.getTraceId())
+                .isEqualTo(response.getTraceId());
+        assertThat(status.getStatus())
+                .isEqualTo(TraceStatus.NOT_IMPLEMENTED);
         assertThat(status.getCreatedAt()).isNotNull();
     }
 
+    /**
+     * Создание сессии для несуществующей загрузки приводит
+     * к {@link UploadNotFoundException}: репозиторий сообщает,
+     * что записи нет
+     */
     @Test
-    @DisplayName("Создание сессии для несуществующей загрузки выбрасывает UploadNotFoundException")
+    @DisplayName("Создание сессии для несуществующей загрузки")
     void shouldThrowWhenUploadNotFound() {
         UUID uploadId = UUID.randomUUID();
-        when(uploadSessionRepository.existsById(uploadId)).thenReturn(false);
+        when(uploadSessionRepository.existsById(uploadId))
+                .thenReturn(false);
 
-        assertThatThrownBy(() -> traceService.createTraceSession(uploadId))
+        assertThatThrownBy(
+                () -> traceService.createTraceSession(uploadId))
                 .isInstanceOf(UploadNotFoundException.class)
                 .hasMessageContaining("не найдена");
     }
 
+    /**
+     * Опрос статуса для неизвестного {@code traceId} приводит
+     * к {@link TraceNotFoundException}
+     */
     @Test
-    @DisplayName("Запрос статуса для неизвестного traceId выбрасывает TraceNotFoundException")
+    @DisplayName("Статус неизвестной задачи")
     void shouldThrowWhenTraceNotFound() {
         UUID unknownTraceId = UUID.randomUUID();
 
-        assertThatThrownBy(() -> traceService.getTraceStatus(unknownTraceId))
+        assertThatThrownBy(
+                () -> traceService.getTraceStatus(unknownTraceId))
                 .isInstanceOf(TraceNotFoundException.class)
                 .hasMessageContaining("не найдена");
     }

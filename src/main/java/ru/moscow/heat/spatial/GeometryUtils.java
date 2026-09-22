@@ -15,9 +15,9 @@ import java.util.Objects;
 /**
  * Пространственные утилиты для работы с геометриями теплосети.
  * Согласно правилам кейса:
- * - Все входные и выходные геометрии представлены в WGS 84 (EPSG:4326).
+ * - Все входные и выходные геометрии представлены в WGS 84 (EPSG:4326)
  * - ВСЕ вычисления расстояний, длин, буферов и углов производятся в метрической
- *   проекции UTM zone 37N (EPSG:32637).
+ *   проекции UTM zone 37N (EPSG:32637)
  */
 @Component
 public class GeometryUtils {
@@ -25,12 +25,12 @@ public class GeometryUtils {
     private final CoordinateTransformService transformService;
 
     public GeometryUtils(CoordinateTransformService transformService) {
-        this.transformService = Objects.requireNonNull(transformService, "CoordinateTransformService must not be null");
+        this.transformService = Objects.requireNonNull(
+            transformService, "CoordinateTransformService must not be null");
     }
 
     /**
-     * Длина геометрии в метрах (вычисляется в EPSG:32637).
-     *
+     * Длина геометрии в метрах (вычисляется в EPSG:32637)
      * @param geom геометрия в EPSG:4326
      * @return длина в метрах
      */
@@ -42,29 +42,30 @@ public class GeometryUtils {
     }
 
     /**
-     * Кратчайшее евклидово расстояние между двумя геометриями в метрах (в EPSG:32637).
-     *
+     * Кратчайшее евклидово расстояние между двумя геометриями в
+     * метрах (в EPSG:32637)
      * @param a первая геометрия в EPSG:4326
      * @param b вторая геометрия в EPSG:4326
      * @return расстояние в метрах
      */
     public double distanceMeters(Geometry a, Geometry b) {
         if (a == null || b == null || a.isEmpty() || b.isEmpty()) {
-            throw new IllegalArgumentException("Геометрии для вычисления расстояния не должны быть null или пустыми");
+            throw new IllegalArgumentException(
+                "Геометрии для вычисления расстояния не должны быть null или пустыми");
         }
         return transformService.toUtm(a).distance(transformService.toUtm(b));
     }
 
     /**
-     * Поиск ближайшей точки на целевой геометрии target к заданной точке from.
-     *
+     * Поиск ближайшей точки на целевой геометрии target к заданной точке from
      * @param target целевая геометрия в EPSG:4326 (полигон, линия и т.п.)
      * @param from   исходная точка в EPSG:4326
      * @return ближайшая точка на target в EPSG:4326
      */
     public Point nearestPointOnGeometry(Geometry target, Point from) {
         if (target == null || from == null || target.isEmpty() || from.isEmpty()) {
-            throw new IllegalArgumentException("Геометрии не должны быть null или пустыми");
+            throw new IllegalArgumentException(
+                "Геометрии не должны быть null или пустыми");
         }
         Geometry targetUtm = transformService.toUtm(target);
         Geometry fromUtm = transformService.toUtm(from);
@@ -79,8 +80,7 @@ public class GeometryUtils {
     }
 
     /**
-     * Проверка пространственного пересечения двух геометрий.
-     *
+     * Проверка пространственного пересечения двух геометрий
      * @param a первая геометрия в EPSG:4326
      * @param b вторая геометрия в EPSG:4326
      * @return true, если геометрии пересекаются в метрической СК
@@ -93,15 +93,15 @@ public class GeometryUtils {
     }
 
     /**
-     * Вычисление геометрического пересечения двух геометрий.
-     *
+     * Вычисление геометрического пересечения двух геометрий
      * @param a первая геометрия в EPSG:4326
      * @param b вторая геометрия в EPSG:4326
      * @return геометрия пересечения в EPSG:4326
      */
     public Geometry intersection(Geometry a, Geometry b) {
         if (a == null || b == null || a.isEmpty() || b.isEmpty()) {
-            throw new IllegalArgumentException("Геометрии не должны быть null или пустыми");
+            throw new IllegalArgumentException(
+                "Геометрии не должны быть null или пустыми");
         }
         Geometry aUtm = transformService.toUtm(a);
         Geometry bUtm = transformService.toUtm(b);
@@ -113,9 +113,8 @@ public class GeometryUtils {
     /**
      * Вычисление угла пересечения двух линий в точке пересечения в градусах,
      * нормализованного в диапазон [0...90].
-     * Применяется для проверки нормативного требования угла пересечения автомобильных
-     * и трамвайных путей (не менее 45 градусов).
-     *
+     * Применяется для проверки нормативного требования угла пересечения
+     * автомобильных и трамвайных путей (не менее 45 градусов)
      * @param a первая линия в EPSG:4326
      * @param b вторая линия в EPSG:4326
      * @return угол пересечения в градусах от 0.0 до 90.0
@@ -123,7 +122,8 @@ public class GeometryUtils {
      */
     public double crossingAngleDeg(LineString a, LineString b) {
         if (a == null || b == null || a.isEmpty() || b.isEmpty()) {
-            throw new IllegalArgumentException("Линии не должны быть null или пустыми");
+            throw new IllegalArgumentException(
+                "Линии не должны быть null или пустыми");
         }
         LineString aUtm = (LineString) transformService.toUtm(a);
         LineString bUtm = (LineString) transformService.toUtm(b);
@@ -154,19 +154,20 @@ public class GeometryUtils {
     }
 
     /**
-     * Построение буферной зоны (габарита) вокруг оси геометрии на заданную ширину.
-     * Буфер откладывается на widthM / 2.0 в каждую сторону от оси в UTM.
-     *
+     * Построение буферной зоны (габарита) вокруг оси геометрии на заданную
+     * ширину. Буфер откладывается на widthM / 2.0 в каждую сторону от оси в UTM
      * @param axis   осевая геометрия в EPSG:4326
      * @param widthM полная ширина габарита в метрах
      * @return полигональная геометрия габарита в EPSG:4326
      */
     public Geometry envelopeAround(Geometry axis, double widthM) {
         if (axis == null || axis.isEmpty()) {
-            throw new IllegalArgumentException("Осевая геометрия не должна быть null или пустой");
+            throw new IllegalArgumentException(
+                "Осевая геометрия не должна быть null или пустой");
         }
         if (widthM <= 0.0) {
-            throw new IllegalArgumentException("Ширина габарита должна быть положительной: " + widthM);
+            throw new IllegalArgumentException(
+                "Ширина габарита должна быть положительной: " + widthM);
         }
         Geometry axisUtm = transformService.toUtm(axis);
         Geometry bufferUtm = axisUtm.buffer(widthM / 2.0);
@@ -176,18 +177,19 @@ public class GeometryUtils {
 
     /**
      * Вычисление координаты точки на линии на расстоянии distanceM от начала.
-     * Выполняется через JTS LengthIndexedLine в метрической проекции UTM.
-     *
+     * Выполняется через JTS LengthIndexedLine в метрической проекции UTM
      * @param line      линия в EPSG:4326
      * @param distanceM расстояние от начала линии в метрах
      * @return точка на линии в EPSG:4326
      */
     public Point pointAtDistance(LineString line, double distanceM) {
         if (line == null || line.isEmpty()) {
-            throw new IllegalArgumentException("Линия не должна быть null или пустой");
+            throw new IllegalArgumentException(
+                "Линия не должна быть null или пустой");
         }
         if (distanceM < 0.0) {
-            throw new IllegalArgumentException("Расстояние не может быть отрицательным: " + distanceM);
+            throw new IllegalArgumentException(
+                "Расстояние не может быть отрицательным: " + distanceM);
         }
         LineString lineUtm = (LineString) transformService.toUtm(line);
         LengthIndexedLine indexedLine = new LengthIndexedLine(lineUtm);
