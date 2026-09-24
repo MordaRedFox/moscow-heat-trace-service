@@ -5,6 +5,19 @@ server:
     connection-timeout: 120000
 
 spring:
+  application:
+    name: heat-trace-service
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://postgres:5432/heat_trace}
+    username: ${SPRING_DATASOURCE_USERNAME:heat}
+    password: ${SPRING_DATASOURCE_PASSWORD:heat}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
   flyway:
     enabled: false
 

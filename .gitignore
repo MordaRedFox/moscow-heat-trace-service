@@ -233,3 +233,7 @@ NOTES.md
 TODO.local.md
 *.local.md
 /src/main/java/prototype/
+
+# Агентские правила и скиллы (локально для IDE, не для git)
+.agents/
+AGENTS.md

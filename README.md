@@ -15,7 +15,7 @@ moscow-heat-trace-service/
  │   │   │   ├── geojson/
  │   │   │   │   ├── config/
  │   │   │   │   │   ├── AsyncConfig.java                    # пул потоков для @Async-парсинга и cron-очистки
- │   │   │   │   │   └── SpatialIndexInitializer.java        # создаёт GIST-индексы на geom/geom_utm после старта
+ │   │   │   │   │   └── SpatialIndexInitializer.java        # создает GIST-индексы на geom/geom_utm после старта
  │   │   │   │   ├── controller/
  │   │   │   │   │   └── GeoJsonUploadController.java        # REST API: POST /upload, GET /uploads/{id}
  │   │   │   │   ├── dto/
@@ -53,7 +53,6 @@ moscow-heat-trace-service/
  │   │   │   │   │   ├── GeometryConverterService.java       # GeoJSON ↔ JTS без потери точности double
  │   │   │   │   │   ├── GeoObjectPersister.java             # раскладка фичи в типизированную таблицу по object_type
  │   │   │   │   │   └── UploadCleanupScheduler.java         # cron-очистка сессий, файлов и типизированных таблиц
- │   │   │   │   │
  │   │   │   │   ├── FeatureError.java                       # ошибка валидации одной фичи: id + сообщение
  │   │   │   │   ├── ObjectType.java                         # enum типов + required-атрибуты и allowed-геометрии
  │   │   │   │   └── UploadStatus.java                       # PENDING / PROCESSING / COMPLETED / FAILED
@@ -61,11 +60,35 @@ moscow-heat-trace-service/
  │   │   │   ├── health/controller/
  │   │   │   │   └── HealthController.java                   # GET /api/health
  │   │   │   │
+ │   │   │   ├── spatial/
+ │   │   │   │   ├── ConsistencyReport.java                  # отчёт валидации: valid, errors, warnings
+ │   │   │   │   ├── DiameterSpec.java                       # строка таблицы 1 ТП: диаметр, пропускная, длина, цена, габариты
+ │   │   │   │   ├── DiameterTable.java                      # справочник ДУ: подбор по расходу и длине
+ │   │   │   │   ├── GeometryUtils.java                      # метрические операции в UTM 37N: длина, расстояние, угол, буфер
+ │   │   │   │   ├── OksConnectionPointResolver.java         # связка точки подключения с полигоном restriction_type=oks
+ │   │   │   │   ├── RestrictionRule.java                    # строка таблицы 2 ТП: правило, мин. расстояние, угол, Kспец
+ │   │   │   │   ├── RestrictionRuleRegistry.java            # реестр правил по restriction_type
+ │   │   │   │   ├── RestrictionRuleType.java                # FORBIDDEN / SPECIAL_CROSSING
+ │   │   │   │   └── UploadConsistencyValidator.java         # проверка консистентности набора перед трассировкой
+ │   │   │   │
+ │   │   │   ├── trace/
+ │   │   │   │   ├── controller/
+ │   │   │   │   │   └── TraceController.java                # REST API: POST /api/trace/{uploadId}, GET /api/trace/{traceId}
+ │   │   │   │   ├── dto/
+ │   │   │   │   │   ├── TraceAcceptedResponse.java          # ответ 202: traceId, statusUrl
+ │   │   │   │   │   ├── TraceStatus.java                    # PENDING/PROCESSING/COMPLETED/FAILED/NOT_IMPLEMENTED
+ │   │   │   │   │   └── TraceStatusResponse.java            # публичный ответ статуса задачи
+ │   │   │   │   ├── exception/
+ │   │   │   │   │   └── TraceNotFoundException.java         # задача трассировки не найдена → HTTP 404
+ │   │   │   │   └── service/
+ │   │   │   │       └── TraceService.java                   # управление сессиями трассировки (in-memory заглушка)
+ │   │   │   │
  │   │   │   └── HeatTraceServiceApplication.java            # точка входа Spring Boot
  │   │   │
  │   │   └── resources/
  │   │       ├── application.yml                             # конфигурация Spring Boot: datasource, JPA, multipart
  │   │       └── schema.sql                                  # CREATE EXTENSION postgis до Hibernate DDL
+ │   │
  │   └── test/
  │       ├── java/ru/moscow/heat/
  │       │   ├── geojson/
@@ -84,13 +107,25 @@ moscow-heat-trace-service/
  │       │   │   │   ├── GeometryConverterServiceTest.java      # GeoJSON ↔ JTS, включая MultiLineString
  │       │   │   │   ├── GeoObjectPersisterIntegrationTest.java # раскладка по 5 типизированным таблицам
  │       │   │   │   └── UploadCleanupSchedulerTest.java        # очистка всех таблиц по upload_id
- │       │   │
  │       │   │   ├── GeoJsonUploadIntegrationTest.java      # E2E: POST /upload → опрос статуса
  │       │   │   ├── ObjectTypeTest.java                    # парсинг enum и required-наборы атрибутов
  │       │   │   └── TestGeoJsonFactory.java                # билдер тестовых фич GeoJSON
  │       │   │
  │       │   ├── health/controller/
  │       │   │   └── HealthControllerTest.java              # @WebMvcTest для /api/health
+ │       │   │
+ │       │   ├── spatial/
+ │       │   │   ├── DiameterTableTest.java                 # справочник ДУ: все строки, подбор по расходу и длине
+ │       │   │   ├── GeometryUtilsTest.java                 # длина, расстояние, угол, буфер, точка на линии
+ │       │   │   ├── OksConnectionPointResolverTest.java    # ST_Contains: точка внутри/вне/на границе полигона
+ │       │   │   ├── RestrictionRuleRegistryTest.java       # таблица 2 ТП: все правила, Kспец, шкала отступа для oks
+ │       │   │   └── UploadConsistencyValidatorTest.java    # проверки errors и warnings на каждом сценарии
+ │       │   │
+ │       │   ├── trace/
+ │       │   │   ├── controller/
+ │       │   │   │   └── TraceControllerTest.java           # @WebMvcTest: 202/501/404 для обоих эндпоинтов
+ │       │   │   └── service/
+ │       │   │       └── TraceServiceTest.java              # Mockito: создание сессии и статус задачи
  │       │   │
  │       │   └── AbstractIntegrationTest.java               # база: @SpringBootTest + singleton PostGIS-контейнер
  │       │
