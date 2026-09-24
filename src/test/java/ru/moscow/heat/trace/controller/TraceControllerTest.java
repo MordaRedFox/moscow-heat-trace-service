@@ -7,6 +7,8 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.web.servlet.MockMvc;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
+import ru.moscow.heat.trace.dto.TieInCandidate;
+import ru.moscow.heat.trace.dto.TieInType;
 import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
 import ru.moscow.heat.trace.dto.TraceStatus;
 import ru.moscow.heat.trace.dto.TraceStatusResponse;
@@ -14,6 +16,7 @@ import ru.moscow.heat.trace.exception.TraceNotFoundException;
 import ru.moscow.heat.trace.service.TraceService;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 import static org.mockito.Mockito.when;
@@ -23,22 +26,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * WebMvc-тесты REST-контроллера {@link TraceController}
- * <p>Используется срез {@link WebMvcTest}: поднимается только
- * веб-слой, {@link TraceService} подменяется моком. Проверяются
- * HTTP-коды и структура JSON-ответов на успешные и ошибочные
- * сценарии обоих эндпоинтов:
- * <ul>
- *   <li>{@code POST /api/trace/{uploadId}} - постановка задачи
- *       в очередь, возвращает 202 Accepted либо 404 при
- *       неизвестной загрузке;</li>
- *   <li>{@code GET /api/trace/{traceId}} - опрос статуса
- *       задачи, в Итерации 3 возвращает 501 Not Implemented
- *       либо 404 для неизвестного {@code traceId}.</li>
- * </ul>
+ * WebMvc-тесты контроллера {@link TraceController}.
+ * Используется срез {@link WebMvcTest}: поднимается только веб-слой,
+ * {@link TraceService} подменяется моком
  */
 @WebMvcTest(TraceController.class)
-@DisplayName("WebMvc-тесты REST API трассировки (TraceController)")
+@DisplayName("WebMvc-тесты TraceController")
 class TraceControllerTest {
 
     @Autowired
@@ -47,14 +40,8 @@ class TraceControllerTest {
     @MockBean
     private TraceService traceService;
 
-    /**
-     * Успешная постановка задачи: сервис возвращает
-     * идентификатор и URL статуса, контроллер отвечает
-     * HTTP 202 Accepted
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("POST при существующей загрузке возвращает 202")
+    @DisplayName("POST существующей загрузки -> 202")
     void shouldReturn202WhenUploadExists() throws Exception {
         UUID uploadId = UUID.randomUUID();
         UUID traceId = UUID.randomUUID();
@@ -72,14 +59,8 @@ class TraceControllerTest {
                         .value(statusUrl));
     }
 
-    /**
-     * Постановка задачи для несуществующей загрузки: сервис
-     * бросает {@link UploadNotFoundException}, контроллер
-     * возвращает HTTP 404 Not Found с текстом ошибки
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("POST при неизвестной загрузке возвращает 404")
+    @DisplayName("POST неизвестной загрузки -> 404")
     void shouldReturn404WhenUploadDoesNotExist() throws Exception {
         UUID uploadId = UUID.randomUUID();
         String message = "Сессия загрузки с id="
@@ -93,15 +74,8 @@ class TraceControllerTest {
                 .andExpect(jsonPath("$.error").value(message));
     }
 
-    /**
-     * Опрос статуса известной задачи: в Итерации 3 алгоритм
-     * не реализован, поэтому контроллер возвращает
-     * HTTP 501 Not Implemented с телом {@link TraceStatusResponse}
-     * и статусом {@code NOT_IMPLEMENTED}
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("GET известной задачи возвращает 501")
+    @DisplayName("GET статуса известной задачи -> 501")
     void shouldReturn501WhenTraceExists() throws Exception {
         UUID traceId = UUID.randomUUID();
         Instant now = Instant.parse("2026-09-22T00:00:00Z");
@@ -120,14 +94,8 @@ class TraceControllerTest {
                         .value("2026-09-22T00:00:00Z"));
     }
 
-    /**
-     * Опрос статуса неизвестной задачи: сервис бросает
-     * {@link TraceNotFoundException}, контроллер возвращает
-     * HTTP 404 Not Found с текстом ошибки
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("GET неизвестной задачи возвращает 404")
+    @DisplayName("GET статуса неизвестной задачи -> 404")
     void shouldReturn404WhenTraceDoesNotExist() throws Exception {
         UUID traceId = UUID.randomUUID();
 
@@ -135,6 +103,66 @@ class TraceControllerTest {
                 .thenThrow(new TraceNotFoundException(traceId));
 
         mvc.perform(get("/api/trace/{traceId}", traceId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error")
+                        .value("Задача трассировки с traceId="
+                                + traceId + " не найдена"));
+    }
+
+    @Test
+    @DisplayName("GET /candidates -> 200 и список")
+    void shouldReturnCandidatesWhenTraceExists() throws Exception {
+        UUID traceId = UUID.randomUUID();
+        TieInCandidate candidate = TieInCandidate.builder()
+                .connectionPointId("oks-point-1")
+                .heatNetworkId("net-section-1")
+                .type(TieInType.EXISTING_CHAMBER)
+                .existingChamberId("chamber-10")
+                .tieInLongitude(37.6175)
+                .tieInLatitude(55.7522)
+                .distanceToNetworkM(3.5)
+                .distanceToChamberM(2.45)
+                .currentAttachments(2)
+                .cost(5_000_000L)
+                .build();
+
+        when(traceService.getCandidates(traceId))
+                .thenReturn(List.of(candidate));
+
+        mvc.perform(get("/api/trace/{traceId}/candidates", traceId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].connectionPointId")
+                        .value("oks-point-1"))
+                .andExpect(jsonPath("$[0].heatNetworkId")
+                        .value("net-section-1"))
+                .andExpect(jsonPath("$[0].type")
+                        .value("EXISTING_CHAMBER"))
+                .andExpect(jsonPath("$[0].existingChamberId")
+                        .value("chamber-10"))
+                .andExpect(jsonPath("$[0].tieInLongitude")
+                        .value(37.6175))
+                .andExpect(jsonPath("$[0].tieInLatitude")
+                        .value(55.7522))
+                .andExpect(jsonPath("$[0].distanceToChamberM")
+                        .value(2.45))
+                .andExpect(jsonPath("$[0].currentAttachments")
+                        .value(2))
+                .andExpect(jsonPath("$[0].cost")
+                        .value(5_000_000L));
+    }
+
+    @Test
+    @DisplayName("GET /candidates неизвестной задачи -> 404")
+    void shouldReturn404WhenGettingCandidatesForUnknownTrace()
+            throws Exception {
+        UUID traceId = UUID.randomUUID();
+
+        when(traceService.getCandidates(traceId))
+                .thenThrow(new TraceNotFoundException(traceId));
+
+        mvc.perform(get("/api/trace/{traceId}/candidates", traceId))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error")
                         .value("Задача трассировки с traceId="

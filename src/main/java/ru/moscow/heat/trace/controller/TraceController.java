@@ -1,6 +1,7 @@
 package ru.moscow.heat.trace.controller;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -11,21 +12,20 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
+import ru.moscow.heat.trace.dto.TieInCandidate;
 import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
 import ru.moscow.heat.trace.dto.TraceStatusResponse;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
 import ru.moscow.heat.trace.service.TraceService;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 /**
- * REST-контроллер моделирования трасс подключения к тепловым сетям
- * В рамках Итерации 3 реализует контрактное API-заглушку:
- * - POST /api/trace/{uploadId} возвращает HTTP 202 Accepted
- *   и регистрирует сессию;
- * - GET /api/trace/{traceId} возвращает HTTP 501 Not Implemented
- *   (алгоритм трассировки реализуется в Итерации 4)
+ * REST-контроллер моделирования трасс подключения к тепловым сетям.
+ * Предоставляет эндпоинты запуска трассировки, опроса статуса и получения
+ * кандидатов на присоединение (tie-in candidates)
  */
 @Slf4j
 @RestController
@@ -88,13 +88,34 @@ public class TraceController {
     })
     public ResponseEntity<TraceStatusResponse> getStatus(
             @PathVariable UUID traceId) {
-        // Задача принимается через 202 на POST, а при опросе статуса на GET
-        // возвращается HTTP 501 Not Implemented, так как ядро алгоритма
-        // трассировки разрабатывается в Итерации 4
         TraceStatusResponse status =
                 traceService.getTraceStatus(traceId);
         return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
                 .body(status);
+    }
+
+    /**
+     * Получение списка кандидатов на присоединение для сессии трассировки.
+     * Отладочный эндпоинт Итерации 4 для контроля выбора точек врезки
+     * @param traceId идентификатор задачи трассировки
+     * @return 200 OK со списком TieInCandidate
+     */
+    @GetMapping("/{traceId}/candidates")
+    @Operation(summary = "Получить кандидатов на присоединение",
+               description = "Возвращает список кандидатов на присоединение к тепловой сети "
+                       + "для точек ОКС сессии трассировки")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200",
+                    description = "Список кандидатов на присоединение",
+                    content = @Content(array = @ArraySchema(
+                            schema = @Schema(implementation = TieInCandidate.class)))),
+            @ApiResponse(responseCode = "404",
+                    description = "Задача трассировки не найдена")
+    })
+    public ResponseEntity<List<TieInCandidate>> getCandidates(
+            @PathVariable UUID traceId) {
+        List<TieInCandidate> candidates = traceService.getCandidates(traceId);
+        return ResponseEntity.ok(candidates);
     }
 
     @ExceptionHandler(UploadNotFoundException.class)
