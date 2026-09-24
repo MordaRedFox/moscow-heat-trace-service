@@ -4,8 +4,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.locationtech.jts.geom.Coordinate;
-import org.locationtech.jts.geom.GeometryFactory;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
@@ -26,22 +24,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.when;
 
 /**
- * Модульные тесты сервиса {@link TraceService}
- * <p>Используется {@link MockitoExtension}:
- * {@link UploadSessionRepository} и {@link TieInCandidateService} подменяются моками.
- * Сессии трассировки и кандидаты хранятся в памяти сервиса.
- * <p>Проверяются:
- * <ul>
- *   <li>успешное создание сессии для существующей загрузки,
- *       включая расчет кандидатов и корректный URL статуса;</li>
- *   <li>отказ с {@link UploadNotFoundException} для несуществующей загрузки;</li>
- *   <li>отказ с {@link TraceNotFoundException} при опросе статуса неизвестной задачи;</li>
- *   <li>получение списка кандидатов по идентификатору задачи трассировки;</li>
- *   <li>отказ с {@link TraceNotFoundException} при запросе кандидатов для неизвестной задачи.</li>
- * </ul>
+ * Модульные тесты сервиса {@link TraceService}.
+ * Репозиторий сессий и сервис кандидатов подменяются моками
  */
 @ExtendWith(MockitoExtension.class)
-@DisplayName("Модульные тесты сервиса трассировки (TraceService)")
+@DisplayName("Модульные тесты TraceService")
 class TraceServiceTest {
 
     @Mock
@@ -51,31 +38,20 @@ class TraceServiceTest {
     private TieInCandidateService tieInCandidateService;
 
     private TraceService traceService;
-    private final GeometryFactory gf = new GeometryFactory();
 
-    /**
-     * Создает сервис с моками перед каждым тестом
-     */
     @BeforeEach
     void setUp() {
-        traceService = new TraceService(uploadSessionRepository, tieInCandidateService);
+        traceService = new TraceService(
+                uploadSessionRepository,
+                tieInCandidateService);
     }
 
-    /**
-     * Создание сессии для существующей загрузки проходит
-     * успешно: возвращается непустой идентификатор задачи,
-     * URL статуса формируется по идентификатору, а сама
-     * сессия доступна через {@code getTraceStatus} со статусом
-     * {@code NOT_IMPLEMENTED}
-     */
     @Test
     @DisplayName("Создание сессии для существующей загрузки")
     void shouldCreateTraceSessionWhenUploadExists() {
         UUID uploadId = UUID.randomUUID();
         when(uploadSessionRepository.existsById(uploadId))
                 .thenReturn(true);
-        when(tieInCandidateService.findCandidatesForAllPoints(uploadId))
-                .thenReturn(Map.of());
 
         TraceAcceptedResponse response =
                 traceService.createTraceSession(uploadId);
@@ -93,11 +69,6 @@ class TraceServiceTest {
         assertThat(status.getCreatedAt()).isNotNull();
     }
 
-    /**
-     * Создание сессии для несуществующей загрузки приводит
-     * к {@link UploadNotFoundException}: репозиторий сообщает,
-     * что записи нет
-     */
     @Test
     @DisplayName("Создание сессии для несуществующей загрузки")
     void shouldThrowWhenUploadNotFound() {
@@ -111,10 +82,6 @@ class TraceServiceTest {
                 .hasMessageContaining("не найдена");
     }
 
-    /**
-     * Опрос статуса для неизвестного {@code traceId} приводит
-     * к {@link TraceNotFoundException}
-     */
     @Test
     @DisplayName("Статус неизвестной задачи")
     void shouldThrowWhenTraceNotFound() {
@@ -126,46 +93,51 @@ class TraceServiceTest {
                 .hasMessageContaining("не найдена");
     }
 
-    /**
-     * Получение кандидатов для существующей задачи трассировки
-     */
     @Test
     @DisplayName("Получение кандидатов для существующей задачи")
     void shouldReturnCandidatesWhenTraceExists() {
         UUID uploadId = UUID.randomUUID();
-        when(uploadSessionRepository.existsById(uploadId)).thenReturn(true);
+        when(uploadSessionRepository.existsById(uploadId))
+                .thenReturn(true);
 
         TieInCandidate candidate = TieInCandidate.builder()
                 .connectionPointId("pt-1")
                 .heatNetworkId("net-1")
-                .tieInType(TieInType.NEW_CHAMBER)
-                .tieInPoint(gf.createPoint(new Coordinate(37.6, 55.7)))
+                .type(TieInType.NEW_CHAMBER)
+                .tieInLongitude(37.6)
+                .tieInLatitude(55.7)
+                .distanceToNetworkM(5.0)
                 .distanceToChamberM(0.0)
-                .cost(3_000_000.0)
-                .requiredChamberDiameter(200)
+                .currentAttachments(0)
+                .cost(3_000_000L)
+                .newChamberDiameter(200)
                 .build();
 
-        when(tieInCandidateService.findCandidatesForAllPoints(uploadId))
+        when(tieInCandidateService
+                .findCandidatesForAllPoints(uploadId))
                 .thenReturn(Map.of("pt-1", List.of(candidate)));
 
-        TraceAcceptedResponse response = traceService.createTraceSession(uploadId);
-        List<TieInCandidate> candidates = traceService.getCandidates(response.getTraceId());
+        TraceAcceptedResponse response =
+                traceService.createTraceSession(uploadId);
+        List<TieInCandidate> candidates = traceService
+                .getCandidates(response.getTraceId());
 
         assertThat(candidates).hasSize(1);
-        assertThat(candidates.get(0).getConnectionPointId()).isEqualTo("pt-1");
-        assertThat(candidates.get(0).getTieInType()).isEqualTo(TieInType.NEW_CHAMBER);
-        assertThat(candidates.get(0).getCost()).isEqualTo(3_000_000.0);
+        assertThat(candidates.get(0).getConnectionPointId())
+                .isEqualTo("pt-1");
+        assertThat(candidates.get(0).getType())
+                .isEqualTo(TieInType.NEW_CHAMBER);
+        assertThat(candidates.get(0).getCost())
+                .isEqualTo(3_000_000L);
     }
 
-    /**
-     * Запрос кандидатов для неизвестного traceId приводит к {@link TraceNotFoundException}
-     */
     @Test
-    @DisplayName("Получение кандидатов для неизвестной задачи")
+    @DisplayName("Кандидаты для неизвестной задачи")
     void shouldThrowWhenGettingCandidatesForUnknownTrace() {
         UUID unknownTraceId = UUID.randomUUID();
 
-        assertThatThrownBy(() -> traceService.getCandidates(unknownTraceId))
+        assertThatThrownBy(
+                () -> traceService.getCandidates(unknownTraceId))
                 .isInstanceOf(TraceNotFoundException.class)
                 .hasMessageContaining("не найдена");
     }

@@ -1,6 +1,5 @@
 package ru.moscow.heat.trace.service;
 
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
 import ru.moscow.heat.geojson.repository.UploadSessionRepository;
@@ -11,46 +10,56 @@ import ru.moscow.heat.trace.dto.TraceStatusResponse;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
 
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 /**
- * Сервис управления сессиями трассировки.
- * Хранилище сессий в оперативной памяти (ConcurrentHashMap).
- * В рамках Итерации 4 выполняет расчет и хранение кандидатов на присоединение (tie-in candidates).
+ * Сервис управления сессиями трассировки
+ * <p>Хранилище сессий в оперативной памяти (ConcurrentHashMap).
+ * При перезапуске приложения все сессии теряются; персистентное
+ * хранение появится вместе с реальной трассировкой
+ * <p>Помимо статуса каждой задачи сервис хранит связку
+ * {@code traceId → uploadId}, чтобы по идентификатору задачи
+ * можно было получить кандидатов на присоединение, рассчитанных
+ * для исходной загрузки
  */
-@Slf4j
 @Service
 public class TraceService {
 
     private final UploadSessionRepository uploadSessionRepository;
     private final TieInCandidateService tieInCandidateService;
-    private final Map<UUID, TraceStatusResponse> sessions = new ConcurrentHashMap<>();
-    private final Map<UUID, UUID> traceUploads = new ConcurrentHashMap<>();
-    private final Map<UUID, List<TieInCandidate>> candidateCache = new ConcurrentHashMap<>();
 
-    public TraceService(
-            UploadSessionRepository uploadSessionRepository,
-            TieInCandidateService tieInCandidateService) {
+    private final Map<UUID, TraceStatusResponse> sessions =
+            new ConcurrentHashMap<>();
+    private final Map<UUID, UUID> traceToUpload =
+            new ConcurrentHashMap<>();
+
+    public TraceService(UploadSessionRepository uploadSessionRepository,
+                        TieInCandidateService tieInCandidateService) {
         this.uploadSessionRepository = Objects.requireNonNull(
-                uploadSessionRepository, "UploadSessionRepository must not be null");
+                uploadSessionRepository,
+                "UploadSessionRepository must not be null");
         this.tieInCandidateService = Objects.requireNonNull(
-                tieInCandidateService, "TieInCandidateService must not be null");
+                tieInCandidateService,
+                "TieInCandidateService must not be null");
     }
 
     /**
-     * Создает новую сессию трассировки для существующей загрузки uploadId
-     * и выполняет расчет кандидатов на присоединение.
-     *
+     * Создает новую сессию трассировки для существующей загрузки
      * @param uploadId идентификатор загруженного набора данных
-     * @return TraceAcceptedResponse со сгенерированным traceId и statusUrl
-     * @throws UploadNotFoundException если uploadId не найден в базе данных
+     * @return ответ со сгенерированным traceId и URL статуса
+     * @throws UploadNotFoundException если uploadId не найден
      */
     public TraceAcceptedResponse createTraceSession(UUID uploadId) {
-        if (uploadId == null || !uploadSessionRepository.existsById(uploadId)) {
+        if (uploadId == null
+                || !uploadSessionRepository.existsById(uploadId)) {
             throw new UploadNotFoundException(
-                    "Сессия загрузки с id=" + uploadId + " не найдена");
+                    "Сессия загрузки с id=" + uploadId
+                            + " не найдена");
         }
 
         UUID traceId = UUID.randomUUID();
@@ -60,27 +69,17 @@ public class TraceService {
                 Instant.now()
         );
         sessions.put(traceId, session);
-        traceUploads.put(traceId, uploadId);
+        traceToUpload.put(traceId, uploadId);
 
-        Map<String, List<TieInCandidate>> candidatesByPoint =
-                tieInCandidateService.findCandidatesForAllPoints(uploadId);
-        List<TieInCandidate> allCandidates = candidatesByPoint.values().stream()
-                .flatMap(List::stream)
-                .collect(Collectors.toList());
-        candidateCache.put(traceId, allCandidates);
-
-        log.info("Сессия трассировки [{}] для загрузки [{}]: вычислено {} кандидатов на присоединение для {} точек ОКС",
-                traceId, uploadId, allCandidates.size(), candidatesByPoint.size());
-
-        return new TraceAcceptedResponse(traceId, "/api/trace/" + traceId);
+        return new TraceAcceptedResponse(
+                traceId, "/api/trace/" + traceId);
     }
 
     /**
      * Получает текущий статус сессии трассировки по traceId
-     *
      * @param traceId идентификатор задачи трассировки
-     * @return TraceStatusResponse
-     * @throws TraceNotFoundException если задача с таким traceId отсутствует
+     * @return статус задачи
+     * @throws TraceNotFoundException если задача не найдена
      */
     public TraceStatusResponse getTraceStatus(UUID traceId) {
         TraceStatusResponse response = sessions.get(traceId);
@@ -91,30 +90,25 @@ public class TraceService {
     }
 
     /**
-     * Получает список кандидатов на присоединение для задачи трассировки
-     *
+     * Возвращает список кандидатов на присоединение для всех
+     * точек подключения ОКС, относящихся к сессии трассировки
+     * <p>Отладочный метод Итерации 4: используется эндпоинтом
+     * {@code GET /api/trace/{traceId}/candidates}
      * @param traceId идентификатор задачи трассировки
-     * @return список кандидатов на присоединение
-     * @throws TraceNotFoundException если задача с таким traceId отсутствует
+     * @return плоский список кандидатов по всем точкам подключения
+     * @throws TraceNotFoundException если задача не найдена
      */
     public List<TieInCandidate> getCandidates(UUID traceId) {
-        if (!sessions.containsKey(traceId)) {
+        UUID uploadId = traceToUpload.get(traceId);
+        if (uploadId == null) {
             throw new TraceNotFoundException(traceId);
         }
-        List<TieInCandidate> cached = candidateCache.get(traceId);
-        if (cached != null) {
-            return cached;
-        }
-        UUID uploadId = traceUploads.get(traceId);
-        if (uploadId == null) {
-            return Collections.emptyList();
-        }
-        Map<String, List<TieInCandidate>> candidatesByPoint =
+        Map<String, List<TieInCandidate>> byPoint =
                 tieInCandidateService.findCandidatesForAllPoints(uploadId);
-        List<TieInCandidate> allCandidates = candidatesByPoint.values().stream()
-                .flatMap(List::stream)
-                .collect(Collectors.toList());
-        candidateCache.put(traceId, allCandidates);
-        return allCandidates;
+        List<TieInCandidate> flat = new ArrayList<>();
+        for (List<TieInCandidate> list : byPoint.values()) {
+            flat.addAll(list);
+        }
+        return flat;
     }
 }

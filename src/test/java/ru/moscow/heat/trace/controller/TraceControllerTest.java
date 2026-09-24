@@ -2,8 +2,6 @@ package ru.moscow.heat.trace.controller;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.locationtech.jts.geom.Coordinate;
-import org.locationtech.jts.geom.GeometryFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
@@ -28,19 +26,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * WebMvc-тесты REST-контроллера {@link TraceController}
- * <p>Используется срез {@link WebMvcTest}: поднимается только
- * веб-слой, {@link TraceService} подменяется моком. Проверяются
- * HTTP-коды и структура JSON-ответов на успешные и ошибочные
- * сценарии эндпоинтов:
- * <ul>
- *   <li>{@code POST /api/trace/{uploadId}} - постановка задачи в очередь;</li>
- *   <li>{@code GET /api/trace/{traceId}} - опрос статуса задачи;</li>
- *   <li>{@code GET /api/trace/{traceId}/candidates} - получение кандидатов на присоединение.</li>
- * </ul>
+ * WebMvc-тесты контроллера {@link TraceController}.
+ * Используется срез {@link WebMvcTest}: поднимается только веб-слой,
+ * {@link TraceService} подменяется моком
  */
 @WebMvcTest(TraceController.class)
-@DisplayName("WebMvc-тесты REST API трассировки (TraceController)")
+@DisplayName("WebMvc-тесты TraceController")
 class TraceControllerTest {
 
     @Autowired
@@ -49,16 +40,8 @@ class TraceControllerTest {
     @MockBean
     private TraceService traceService;
 
-    private final GeometryFactory gf = new GeometryFactory();
-
-    /**
-     * Успешная постановка задачи: сервис возвращает
-     * идентификатор и URL статуса, контроллер отвечает
-     * HTTP 202 Accepted
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("POST при существующей загрузке возвращает 202")
+    @DisplayName("POST существующей загрузки -> 202")
     void shouldReturn202WhenUploadExists() throws Exception {
         UUID uploadId = UUID.randomUUID();
         UUID traceId = UUID.randomUUID();
@@ -76,14 +59,8 @@ class TraceControllerTest {
                         .value(statusUrl));
     }
 
-    /**
-     * Постановка задачи для несуществующей загрузки: сервис
-     * бросает {@link UploadNotFoundException}, контроллер
-     * возвращает HTTP 404 Not Found с текстом ошибки
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("POST при неизвестной загрузке возвращает 404")
+    @DisplayName("POST неизвестной загрузки -> 404")
     void shouldReturn404WhenUploadDoesNotExist() throws Exception {
         UUID uploadId = UUID.randomUUID();
         String message = "Сессия загрузки с id="
@@ -97,15 +74,8 @@ class TraceControllerTest {
                 .andExpect(jsonPath("$.error").value(message));
     }
 
-    /**
-     * Опрос статуса известной задачи: в Итерации 3 алгоритм
-     * не реализован, поэтому контроллер возвращает
-     * HTTP 501 Not Implemented с телом {@link TraceStatusResponse}
-     * и статусом {@code NOT_IMPLEMENTED}
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("GET известной задачи возвращает 501")
+    @DisplayName("GET статуса известной задачи -> 501")
     void shouldReturn501WhenTraceExists() throws Exception {
         UUID traceId = UUID.randomUUID();
         Instant now = Instant.parse("2026-09-22T00:00:00Z");
@@ -124,14 +94,8 @@ class TraceControllerTest {
                         .value("2026-09-22T00:00:00Z"));
     }
 
-    /**
-     * Опрос статуса неизвестной задачи: сервис бросает
-     * {@link TraceNotFoundException}, контроллер возвращает
-     * HTTP 404 Not Found с текстом ошибки
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("GET неизвестной задачи возвращает 404")
+    @DisplayName("GET статуса неизвестной задачи -> 404")
     void shouldReturn404WhenTraceDoesNotExist() throws Exception {
         UUID traceId = UUID.randomUUID();
 
@@ -145,24 +109,21 @@ class TraceControllerTest {
                                 + traceId + " не найдена"));
     }
 
-    /**
-     * Запрос кандидатов для существующей задачи: контроллер
-     * возвращает HTTP 200 OK и JSON-список TieInCandidate
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("GET /candidates известной задачи возвращает 200 и список кандидатов")
+    @DisplayName("GET /candidates -> 200 и список")
     void shouldReturnCandidatesWhenTraceExists() throws Exception {
         UUID traceId = UUID.randomUUID();
         TieInCandidate candidate = TieInCandidate.builder()
                 .connectionPointId("oks-point-1")
                 .heatNetworkId("net-section-1")
-                .tieInType(TieInType.EXISTING_CHAMBER)
+                .type(TieInType.EXISTING_CHAMBER)
                 .existingChamberId("chamber-10")
-                .tieInPoint(gf.createPoint(new Coordinate(37.6175, 55.7522)))
+                .tieInLongitude(37.6175)
+                .tieInLatitude(55.7522)
+                .distanceToNetworkM(3.5)
                 .distanceToChamberM(2.45)
-                .currentChamberConnections(2)
-                .cost(5_000_000.0)
+                .currentAttachments(2)
+                .cost(5_000_000L)
                 .build();
 
         when(traceService.getCandidates(traceId))
@@ -172,26 +133,30 @@ class TraceControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray())
                 .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].connectionPointId").value("oks-point-1"))
-                .andExpect(jsonPath("$[0].heatNetworkId").value("net-section-1"))
-                .andExpect(jsonPath("$[0].tieInType").value("EXISTING_CHAMBER"))
-                .andExpect(jsonPath("$[0].existingChamberId").value("chamber-10"))
-                .andExpect(jsonPath("$[0].tieInPoint.type").value("Point"))
-                .andExpect(jsonPath("$[0].tieInPoint.coordinates[0]").value(37.6175))
-                .andExpect(jsonPath("$[0].tieInPoint.coordinates[1]").value(55.7522))
-                .andExpect(jsonPath("$[0].distanceToChamberM").value(2.45))
-                .andExpect(jsonPath("$[0].currentChamberConnections").value(2))
-                .andExpect(jsonPath("$[0].cost").value(5_000_000.0));
+                .andExpect(jsonPath("$[0].connectionPointId")
+                        .value("oks-point-1"))
+                .andExpect(jsonPath("$[0].heatNetworkId")
+                        .value("net-section-1"))
+                .andExpect(jsonPath("$[0].type")
+                        .value("EXISTING_CHAMBER"))
+                .andExpect(jsonPath("$[0].existingChamberId")
+                        .value("chamber-10"))
+                .andExpect(jsonPath("$[0].tieInLongitude")
+                        .value(37.6175))
+                .andExpect(jsonPath("$[0].tieInLatitude")
+                        .value(55.7522))
+                .andExpect(jsonPath("$[0].distanceToChamberM")
+                        .value(2.45))
+                .andExpect(jsonPath("$[0].currentAttachments")
+                        .value(2))
+                .andExpect(jsonPath("$[0].cost")
+                        .value(5_000_000L));
     }
 
-    /**
-     * Запрос кандидатов для неизвестной задачи: сервис бросает
-     * {@link TraceNotFoundException}, контроллер возвращает HTTP 404 Not Found
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("GET /candidates неизвестной задачи возвращает 404")
-    void shouldReturn404WhenGettingCandidatesForUnknownTrace() throws Exception {
+    @DisplayName("GET /candidates неизвестной задачи -> 404")
+    void shouldReturn404WhenGettingCandidatesForUnknownTrace()
+            throws Exception {
         UUID traceId = UUID.randomUUID();
 
         when(traceService.getCandidates(traceId))
