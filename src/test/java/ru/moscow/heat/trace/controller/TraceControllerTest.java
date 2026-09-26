@@ -13,12 +13,14 @@ import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
 import ru.moscow.heat.trace.dto.TraceStatus;
 import ru.moscow.heat.trace.dto.TraceStatusResponse;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
+import ru.moscow.heat.trace.service.TraceAsyncProcessor;
 import ru.moscow.heat.trace.service.TraceService;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -27,8 +29,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * WebMvc-тесты контроллера {@link TraceController}.
- * Используется срез {@link WebMvcTest}: поднимается только веб-слой,
- * {@link TraceService} подменяется моком
+ * Поднимается только веб-слой, {@link TraceService} и
+ * {@link TraceAsyncProcessor} подменяются моками
+ * <p>
+ * Итерация 5: {@code startTrace} теперь дополнительно вызывает
+ * {@code traceAsyncProcessor.process(traceId, uploadId)}; {@code getStatus}
+ * отдает 200 OK с реальным статусом (не 501, как в заглушке итерации 3)
  */
 @WebMvcTest(TraceController.class)
 @DisplayName("WebMvc-тесты TraceController")
@@ -40,31 +46,32 @@ class TraceControllerTest {
     @MockBean
     private TraceService traceService;
 
+    @MockBean
+    private TraceAsyncProcessor traceAsyncProcessor;
+
     @Test
-    @DisplayName("POST существующей загрузки -> 202")
-    void shouldReturn202WhenUploadExists() throws Exception {
+    @DisplayName("POST существующей загрузки -> 202 и запуск async-обработки")
+    void shouldReturn202AndTriggerAsync() throws Exception {
         UUID uploadId = UUID.randomUUID();
         UUID traceId = UUID.randomUUID();
         String statusUrl = "/api/trace/" + traceId;
 
         when(traceService.createTraceSession(uploadId))
-                .thenReturn(new TraceAcceptedResponse(
-                        traceId, statusUrl));
+                .thenReturn(new TraceAcceptedResponse(traceId, statusUrl));
 
         mvc.perform(post("/api/trace/{uploadId}", uploadId))
                 .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.traceId")
-                        .value(traceId.toString()))
-                .andExpect(jsonPath("$.statusUrl")
-                        .value(statusUrl));
+                .andExpect(jsonPath("$.traceId").value(traceId.toString()))
+                .andExpect(jsonPath("$.statusUrl").value(statusUrl));
+
+        verify(traceAsyncProcessor).process(traceId, uploadId);
     }
 
     @Test
     @DisplayName("POST неизвестной загрузки -> 404")
     void shouldReturn404WhenUploadDoesNotExist() throws Exception {
         UUID uploadId = UUID.randomUUID();
-        String message = "Сессия загрузки с id="
-                + uploadId + " не найдена";
+        String message = "Сессия загрузки с id=" + uploadId + " не найдена";
 
         when(traceService.createTraceSession(uploadId))
                 .thenThrow(new UploadNotFoundException(message));
@@ -75,23 +82,49 @@ class TraceControllerTest {
     }
 
     @Test
-    @DisplayName("GET статуса известной задачи -> 501")
-    void shouldReturn501WhenTraceExists() throws Exception {
+    @DisplayName("GET статуса известной задачи -> 200 с PENDING")
+    void shouldReturn200WhenTraceExists() throws Exception {
         UUID traceId = UUID.randomUUID();
         Instant now = Instant.parse("2026-09-22T00:00:00Z");
 
         when(traceService.getTraceStatus(traceId))
-                .thenReturn(new TraceStatusResponse(
-                        traceId, TraceStatus.NOT_IMPLEMENTED, now));
+                .thenReturn(TraceStatusResponse.builder()
+                        .traceId(traceId)
+                        .status(TraceStatus.PENDING)
+                        .createdAt(now)
+                        .build());
 
         mvc.perform(get("/api/trace/{traceId}", traceId))
-                .andExpect(status().isNotImplemented())
-                .andExpect(jsonPath("$.traceId")
-                        .value(traceId.toString()))
-                .andExpect(jsonPath("$.status")
-                        .value("NOT_IMPLEMENTED"))
-                .andExpect(jsonPath("$.createdAt")
-                        .value("2026-09-22T00:00:00Z"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.traceId").value(traceId.toString()))
+                .andExpect(jsonPath("$.status").value("PENDING"));
+    }
+
+    @Test
+    @DisplayName("GET статуса COMPLETED с счётчиками -> 200")
+    void shouldReturn200WithCounters() throws Exception {
+        UUID traceId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-22T00:00:00Z");
+
+        when(traceService.getTraceStatus(traceId))
+                .thenReturn(TraceStatusResponse.builder()
+                        .traceId(traceId)
+                        .status(TraceStatus.COMPLETED)
+                        .createdAt(now)
+                        .completedAt(now)
+                        .totalOksCount(5)
+                        .connectedCount(4)
+                        .unconnectedCount(1)
+                        .unconnectedOksFeatureIds(List.of("oks-5"))
+                        .build());
+
+        mvc.perform(get("/api/trace/{traceId}", traceId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.totalOksCount").value(5))
+                .andExpect(jsonPath("$.connectedCount").value(4))
+                .andExpect(jsonPath("$.unconnectedCount").value(1))
+                .andExpect(jsonPath("$.unconnectedOksFeatureIds[0]").value("oks-5"));
     }
 
     @Test
@@ -120,6 +153,8 @@ class TraceControllerTest {
                 .existingChamberId("chamber-10")
                 .tieInLongitude(37.6175)
                 .tieInLatitude(55.7522)
+                .targetLongitude(37.6176)
+                .targetLatitude(55.7523)
                 .distanceToNetworkM(3.5)
                 .distanceToChamberM(2.45)
                 .currentAttachments(2)
@@ -141,10 +176,10 @@ class TraceControllerTest {
                         .value("EXISTING_CHAMBER"))
                 .andExpect(jsonPath("$[0].existingChamberId")
                         .value("chamber-10"))
-                .andExpect(jsonPath("$[0].tieInLongitude")
-                        .value(37.6175))
-                .andExpect(jsonPath("$[0].tieInLatitude")
-                        .value(55.7522))
+                .andExpect(jsonPath("$[0].targetLongitude")
+                        .value(37.6176))
+                .andExpect(jsonPath("$[0].targetLatitude")
+                        .value(55.7523))
                 .andExpect(jsonPath("$[0].distanceToChamberM")
                         .value(2.45))
                 .andExpect(jsonPath("$[0].currentAttachments")

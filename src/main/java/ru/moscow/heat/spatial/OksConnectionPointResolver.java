@@ -8,16 +8,17 @@ import java.util.*;
 
 /**
  * Сервис связывания точек подключения ОКС с полигонами ОКС
- * (restriction_type = 'oks')
- * Согласно ТП (раздел 2.2) и разъяснениям организаторов (п. 3):
- * - Полигон restriction_type = 'oks' является пространственным
- *   ограничением
- * - Для полигона, содержащего целевую точку подключения,
- *   допускается один финальный прямой участок без соблюдения
- *   защитного отступа к собственному полигону
- * - Связывание выполняется нативным запросом PostGIS с функцией
- *   ST_Contains по метрической колонке geometry_utm с использованием
- *   пространственных GiST-индексов
+ * ({@code restriction_type = 'oks'})
+ * <p>Согласно ТП (раздел 2.2) и разъяснениям (п. 3):
+ * <ul>
+ *     <li>полигон {@code restriction_type = 'oks'} является
+ *     пространственным ограничением;</li>
+ *     <li>для полигона, содержащего целевую точку подключения, допускается
+ *     один финальный прямой участок без соблюдения защитного отступа
+ *     к собственному полигону;</li>
+ *     <li>связывание выполняется нативным запросом PostGIS с функцией
+ *     {@code ST_Contains} по метрической колонке {@code geometry_utm}.</li>
+ * </ul>
  */
 @Service
 public class OksConnectionPointResolver {
@@ -30,14 +31,10 @@ public class OksConnectionPointResolver {
     }
 
     /**
-     * Для каждой точки oks_connection_point находит feature_id
-     * содержащего ее полигона restriction с restriction_type = 'oks'.
-     * Точка, лежащая строго на границе полигона, по семантике OGC
-     * ST_Contains НЕ считается принадлежащей внутренней области
-     * полигона и не будет включена в результат
+     * Для каждой точки {@code oks_connection_point} находит {@code feature_id}
+     * содержащего её полигона {@code restriction_type='oks'}
      * @param uploadId идентификатор сессии загрузки
-     * @return Map, где ключ — feature_id точки, значение — feature_id
-     *         полигона ОКС
+     * @return Map: feature_id точки → feature_id полигона
      */
     @Transactional(readOnly = true)
     public Map<String, String> resolvePolygonIds(UUID uploadId) {
@@ -68,9 +65,43 @@ public class OksConnectionPointResolver {
     }
 
     /**
-     * Возвращает список feature_id точек oks_connection_point,
-     * которые не входят ни в один полигон restriction
-     * с restriction_type = 'oks' (включая точки, лежащие на границе полигона)
+     * Возвращает первичный ключ ({@code id}) полигона ОКС, содержащего
+     * заданную точку подключения. Используется в {@code TraceOrchestrator}
+     * для подстановки в набор игнорируемых FORBIDDEN-зон при поиске пути
+     * (см. {@code VisibilityGraph.shortestPath(..., Set<Long>)})
+     * @param uploadId        идентификатор сессии загрузки
+     * @param pointFeatureId  feature_id точки подключения ОКС
+     * @return id полигона, если точка лежит строго внутри него;
+     *         {@code Optional.empty()} в противном случае
+     */
+    @Transactional(readOnly = true)
+    public Optional<Long> resolvePolygonDatabaseId(UUID uploadId,
+                                                    String pointFeatureId) {
+        if (uploadId == null || pointFeatureId == null) {
+            return Optional.empty();
+        }
+        String sql = "SELECT r.id FROM oks_connection_point p "
+                + "JOIN restriction r ON p.upload_id = r.upload_id "
+                + "WHERE p.upload_id = :uploadId "
+                + "  AND p.feature_id = :pointFeatureId "
+                + "  AND r.restriction_type = 'oks' "
+                + "  AND ST_Contains(r.geometry_utm, p.geometry_utm) "
+                + "LIMIT 1";
+
+        @SuppressWarnings("unchecked")
+        List<Number> rows = entityManager.createNativeQuery(sql)
+                .setParameter("uploadId", uploadId)
+                .setParameter("pointFeatureId", pointFeatureId)
+                .getResultList();
+        if (rows.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(rows.get(0).longValue());
+    }
+
+    /**
+     * Возвращает список {@code feature_id} точек ОКС, не входящих
+     * ни в один полигон {@code restriction_type='oks'}
      * @param uploadId идентификатор сессии загрузки
      * @return список feature_id непривязанных точек
      */
@@ -87,8 +118,7 @@ public class OksConnectionPointResolver {
                 + "    SELECT 1 FROM restriction r "
                 + "    WHERE r.upload_id = p.upload_id "
                 + "      AND r.restriction_type = 'oks' "
-                + "      AND ST_Contains(r.geometry_utm, "
-                + "p.geometry_utm)"
+                + "      AND ST_Contains(r.geometry_utm, p.geometry_utm)"
                 + "  ) "
                 + "ORDER BY p.feature_id";
 

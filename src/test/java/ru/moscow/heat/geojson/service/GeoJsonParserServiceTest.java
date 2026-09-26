@@ -26,6 +26,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * с полным набором типов объектов, валидация структуры файла,
  * обязательных атрибутов, геометрии, типов значений и обработка
  * дубликатов идентификаторов
+ * <p>Отдельно проверяется поддержка числового {@code id} -
+ * требование ТП раздел 1.1: «Идентификаторы входных объектов могут
+ * быть строковыми или числовыми»
  */
 class GeoJsonParserServiceTest extends AbstractIntegrationTest {
 
@@ -144,7 +147,8 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isZero();
     }
 
-    // ---------- Негативные сценарии: структура ----------
+    // Негативные сценарии: структура
+
     @Test
     void rejectNonJsonObject() {
         assertThatThrownBy(() -> parser.processStream(
@@ -215,7 +219,8 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
                 .hasMessageContaining("CRS");
     }
 
-    // ---------- Негативные сценарии: фичи ----------
+    // Негативные сценарии: фичи
+
     @Test
     void rejectFeatureWithoutProperties() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -264,6 +269,57 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount())
                 .as("id=null должен дать ошибку валидации")
                 .isEqualTo(1);
+    }
+
+    /**
+     * Числовой id (например, {@code "id": 1}) принимается без ошибок -
+     * ТП раздел 1.1 разрешает как строковые, так и числовые
+     * идентификаторы. Такие id встречаются в конкурсном наборе
+     * @throws Exception при ошибке парсинга
+     */
+    @Test
+    @DisplayName("Числовой id принимается")
+    void acceptNumericId() throws Exception {
+        String json = "{\"type\":\"FeatureCollection\","
+                + "\"features\":["
+                + "{\"type\":\"Feature\","
+                + "\"properties\":{\"id\":1,"
+                + "\"object_type\":\"source\"},"
+                + "\"geometry\":{\"type\":\"Point\","
+                + "\"coordinates\":[37.6,55.75]}}]}";
+
+        GeoJsonUploadResponse r = parser.processStream(
+                new ByteArrayInputStream(json.getBytes()),
+                uploadId);
+
+        assertThat(r.getTotalErrorsCount()).isZero();
+        assertThat(r.getTotalCount()).isEqualTo(1);
+        assertThat(r.getCountsByType())
+                .containsEntry(ObjectType.SOURCE, 1);
+    }
+
+    /**
+     * Булев id отклоняется - допустимы только строка или число
+     * @throws Exception при ошибке парсинга
+     */
+    @Test
+    @DisplayName("Булев id отклоняется")
+    void rejectBooleanId() throws Exception {
+        String json = "{\"type\":\"FeatureCollection\","
+                + "\"features\":["
+                + "{\"type\":\"Feature\","
+                + "\"properties\":{\"id\":true,"
+                + "\"object_type\":\"source\"},"
+                + "\"geometry\":{\"type\":\"Point\","
+                + "\"coordinates\":[37.6,55.75]}}]}";
+
+        GeoJsonUploadResponse r = parser.processStream(
+                new ByteArrayInputStream(json.getBytes()),
+                uploadId);
+
+        assertThat(r.getTotalErrorsCount()).isEqualTo(1);
+        assertThat(r.getErrors().get(0).getMessage())
+                .contains("id");
     }
 
     @Test
@@ -514,7 +570,8 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    // ---------- Типы атрибутов ----------
+    // Типы атрибутов
+
     @Test
     void rejectDiameterAsString() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -531,7 +588,8 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
         assertThat(r.getTotalErrorsCount()).isEqualTo(1);
     }
 
-    // ---------- Дубликаты ----------
+    // Дубликаты
+
     @Test
     void duplicateFeatureId_reportsErrorForSecondOccurrence()
             throws Exception {
@@ -555,9 +613,9 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
     }
 
     /**
-    * restriction с линейной геометрией LineString принимается
-    * @throws Exception при ошибке парсинга
-    */
+     * restriction с линейной геометрией LineString принимается
+     * @throws Exception при ошибке парсинга
+     */
     @Test
     void restrictionWithLineStringAccepted() throws Exception {
         ObjectNode c = TestGeoJsonFactory.featureCollection();
@@ -569,7 +627,7 @@ class GeoJsonParserServiceTest extends AbstractIntegrationTest {
 
         GeoJsonUploadResponse resp = parser.processStream(
                 new ByteArrayInputStream(TestGeoJsonFactory.toBytes(c)),
-                        uploadId);
+                uploadId);
         assertThat(resp.getTotalErrorsCount()).isZero();
     }
 }

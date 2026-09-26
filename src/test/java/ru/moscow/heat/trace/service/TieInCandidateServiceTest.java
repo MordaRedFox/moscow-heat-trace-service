@@ -37,12 +37,16 @@ import static org.mockito.Mockito.when;
 /**
  * Модульные тесты сервиса {@link TieInCandidateService}.
  * Проверяют нормативные правила выбора точек присоединения согласно
- * разделу 3.2 ТП:
- * - геометрический поиск ближайшей точки на сегменте теплосети;
- * - учет камер в радиусе 10 м и отсечение камер за пределами радиуса;
- * - расчет примыканий (1, 2, 3 участка - подходит, 4 - переполнение);
- * - переключение между EXISTING_CHAMBER и NEW_CHAMBER;
- * - шкала стоимости новой камеры по условным диаметрам
+ * разделу 3.2 ТП и разъяснениям:
+ * <ul>
+ *   <li>геометрический поиск ближайшей точки на сегменте теплосети;</li>
+ *   <li>учёт камер в радиусе 10 м и отсечение камер за пределами радиуса;</li>
+ *   <li>расчёт примыканий (1, 2, 3 участка — подходит, 4 — переполнение);</li>
+ *   <li>переключение между EXISTING_CHAMBER и NEW_CHAMBER;</li>
+ *   <li>разделение координат tie-in (точка на сети) и target (камера для
+ *       EXISTING_CHAMBER, точка на сети для NEW_CHAMBER);</li>
+ *   <li>шкала стоимости новой камеры по условным диаметрам.</li>
+ * </ul>
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("Модульные тесты сервиса кандидатов (TieInCandidateService)")
@@ -116,11 +120,12 @@ class TieInCandidateServiceTest {
 
     /**
      * Существующая камера в радиусе 10 м формирует кандидата
-     * {@link TieInType#EXISTING_CHAMBER} со стоимостью врезки
-     * 5 000 000 руб
+     * {@link TieInType#EXISTING_CHAMBER}. Проверяется, что
+     * {@code targetXxx} отличается от {@code tieInXxx} — маршрут
+     * должен прийти в камеру, а не в точку на сети
      */
     @Test
-    @DisplayName("Камера в радиусе 10 м -> EXISTING_CHAMBER")
+    @DisplayName("Камера в радиусе 10 м -> EXISTING_CHAMBER, target = камера")
     void chamberWithin10mIsConsidered() {
         OksConnectionPointEntity point = pointAt(37.6150, 55.7501);
         HeatNetworkEntity net = networkAt(37.6100, 37.6200, 300);
@@ -151,13 +156,26 @@ class TieInCandidateServiceTest {
         assertThat(c.getDistanceToChamberM())
                 .isGreaterThan(0.0).isLessThanOrEqualTo(10.0);
         assertThat(c.getNewChamberDiameter()).isNull();
+
+        // target = камера, tieIn = точка на сети → по x отличаются
+        assertThat(c.getTargetLongitude())
+                .isCloseTo(37.61508,
+                        org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(c.getTieInLongitude())
+                .isCloseTo(37.6150,
+                        org.assertj.core.data.Offset.offset(1e-3));
+        assertThat(c.getTargetLongitude())
+                .isNotEqualTo(c.getTieInLongitude());
     }
 
     /**
-     * Камер в радиусе 10 м нет - создается кандидат {@link TieInType#NEW_CHAMBER}
+     * Камер в радиусе 10 м нет - создается кандидат
+     * {@link TieInType#NEW_CHAMBER}. Проверяется, что
+     * {@code targetXxx} совпадает с {@code tieInXxx}: новая камера
+     * создается именно в точке присоединения на сети
      */
     @Test
-    @DisplayName("Камер нет -> NEW_CHAMBER")
+    @DisplayName("Камер нет -> NEW_CHAMBER, target = tie-in")
     void chamberOutside10mIsIgnored() {
         OksConnectionPointEntity point = pointAt(37.6150, 55.7501);
         HeatNetworkEntity net = networkAt(37.6100, 37.6200, 400);
@@ -182,41 +200,33 @@ class TieInCandidateServiceTest {
         assertThat(c.getCost()).isEqualTo(5_000_000L);
         assertThat(c.getDistanceToChamberM()).isEqualTo(0.0);
         assertThat(c.getNewChamberDiameter()).isEqualTo(400);
+
+        assertThat(c.getTargetLongitude())
+                .isEqualTo(c.getTieInLongitude());
+        assertThat(c.getTargetLatitude())
+                .isEqualTo(c.getTieInLatitude());
     }
 
-    /**
-     * 1 примыкание у камеры (1 + 1 <= 4) - камера подходит
-     */
     @Test
-    @DisplayName("1 примыкание - камера подходит")
+    @DisplayName("1 примыкание — камера подходит")
     void connectionsCountOne() {
         assertChamberSuitability(1);
     }
 
-    /**
-     * 2 примыкания у камеры (2 + 1 <= 4) - камера подходит
-     */
     @Test
-    @DisplayName("2 примыкания - камера подходит")
+    @DisplayName("2 примыкания — камера подходит")
     void connectionsCountTwo() {
         assertChamberSuitability(2);
     }
 
-    /**
-     * 3 примыкания у камеры (3 + 1 <= 4) - камера подходит
-     */
     @Test
-    @DisplayName("3 примыкания - камера подходит")
+    @DisplayName("3 примыкания — камера подходит")
     void connectionsCountThree() {
         assertChamberSuitability(3);
     }
 
-    /**
-     * 4 примыкания у камеры (4 + 1 > 4) - камера переполнена,
-     * выбирается {@link TieInType#NEW_CHAMBER}
-     */
     @Test
-    @DisplayName("4 примыкания - камера переполнена -> NEW_CHAMBER")
+    @DisplayName("4 примыкания — камера переполнена -> NEW_CHAMBER")
     void connectionsCountFour() {
         OksConnectionPointEntity point = pointAt(37.6150, 55.7501);
         HeatNetworkEntity net = networkAt(37.6100, 37.6200, 200);
@@ -246,10 +256,6 @@ class TieInCandidateServiceTest {
         assertThat(c.getNewChamberDiameter()).isEqualTo(200);
     }
 
-    /**
-     * Стоимость новой камеры по шкале таблицы 3.2 ТП.
-     * Проверяется через {@link ChamberCostTable#costForDiameter(int)}
-     */
     @Test
     @DisplayName("Шкала стоимости новой камеры (таблица 3.2)")
     void newChamberCostByDiameterScale() {
@@ -278,11 +284,8 @@ class TieInCandidateServiceTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    /**
-     * Загрузка без тепловых сетей: возвращается пустой список
-     */
     @Test
-    @DisplayName("Нет сетей - пустой список")
+    @DisplayName("Нет сетей — пустой список")
     void emptyUploadHandledGracefully() {
         OksConnectionPointEntity point = pointAt(37.6150, 55.7501);
 
@@ -299,12 +302,8 @@ class TieInCandidateServiceTest {
         assertThat(candidates).isEmpty();
     }
 
-    /**
-     * Несколько камер в радиусе 10 м: обе возвращаются,
-     * сортировка - по расстоянию (ближайшая первой)
-     */
     @Test
-    @DisplayName("Несколько камер - сортировка по расстоянию")
+    @DisplayName("Несколько камер — сортировка по расстоянию")
     void multipleChambersReturnedAndSorted() {
         OksConnectionPointEntity point = pointAt(37.6150, 55.7501);
         HeatNetworkEntity net = networkAt(37.6100, 37.6200, 500);
@@ -335,9 +334,17 @@ class TieInCandidateServiceTest {
                 .isEqualTo("ch-close");
         assertThat(candidates.get(1).getExistingChamberId())
                 .isEqualTo("ch-distant");
+
+        assertThat(candidates.get(0).getTargetLongitude())
+                .isCloseTo(37.61503,
+                        org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(candidates.get(1).getTargetLongitude())
+                .isCloseTo(37.61511,
+                        org.assertj.core.data.Offset.offset(1e-6));
     }
 
     // Хелперы
+
     private void assertChamberSuitability(int attachments) {
         OksConnectionPointEntity point = pointAt(37.6150, 55.7501);
         HeatNetworkEntity net = networkAt(37.6100, 37.6200, 200);

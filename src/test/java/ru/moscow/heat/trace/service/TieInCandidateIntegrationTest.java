@@ -31,10 +31,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * с реальным PostgreSQL + PostGIS через Testcontainers
  * <p>Проверяются:
  * <ul>
- *   <li>подсчет примыканий native-запросом (1/2/4 примыканий,
+ *   <li>подсчёт примыканий native-запросом (1/2/4 примыканий,
  *       транзитная линия);</li>
  *   <li>поиск кандидатов на синтетическом датасете
- *       (существующая камера, удаленная камера);</li>
+ *       (существующая камера, удалённая камера, переполненная камера);</li>
+ *   <li>разделение координат tie-in и target — маршрут идёт в камеру
+ *       для EXISTING_CHAMBER и в точку на сети для NEW_CHAMBER;</li>
  *   <li>изоляция выборок и кандидатов по {@code upload_id};</li>
  *   <li>пакетный поиск кандидатов по всем точкам загрузки.</li>
  * </ul>
@@ -123,13 +125,8 @@ class TieInCandidateIntegrationTest extends AbstractIntegrationTest {
         return oksCpRepo.save(point);
     }
 
-    /**
-     * Подсчет примыканий native-запросом: 0, 1, 2, 4 примыканий,
-     * а также транзитная линия, проходящая рядом, но не
-     * заканчивающаяся в камере
-     */
     @Test
-    @DisplayName("Подсчет примыканий через countConnectionsToChamber")
+    @DisplayName("Подсчёт примыканий через countConnectionsToChamber")
     void countConnectionsNativeQuery() {
         Point chamberUtm = gf.createPoint(
                 new Coordinate(baseX, baseY));
@@ -176,7 +173,8 @@ class TieInCandidateIntegrationTest extends AbstractIntegrationTest {
 
     /**
      * Синтетический датасет: EXISTING_CHAMBER для точки рядом
-     * с камерой, NEW_CHAMBER для точки в 60 м от камеры
+     * с камерой (target = камера), NEW_CHAMBER для точки в 60 м
+     * от камеры (target = точка на сети)
      */
     @Test
     @DisplayName("EXISTING_CHAMBER и NEW_CHAMBER на датасете")
@@ -206,6 +204,8 @@ class TieInCandidateIntegrationTest extends AbstractIntegrationTest {
         assertThat(best1.getExistingChamberId()).isEqualTo("ch-1");
         assertThat(best1.getCost()).isEqualTo(5_000_000L);
         assertThat(best1.getCurrentAttachments()).isEqualTo(2);
+        assertThat(best1.getTargetLongitude()).isNotEqualTo(0.0);
+        assertThat(best1.getTargetLatitude()).isNotEqualTo(0.0);
 
         Point oks2Utm = gf.createPoint(
                 new Coordinate(baseX + 60, baseY + 5));
@@ -221,12 +221,13 @@ class TieInCandidateIntegrationTest extends AbstractIntegrationTest {
         assertThat(best2.getCost()).isEqualTo(5_000_000L);
         assertThat(best2.getNewChamberDiameter()).isEqualTo(500);
         assertThat(best2.getDistanceToChamberM()).isEqualTo(0.0);
+
+        assertThat(best2.getTargetLongitude())
+                .isEqualTo(best2.getTieInLongitude());
+        assertThat(best2.getTargetLatitude())
+                .isEqualTo(best2.getTieInLatitude());
     }
 
-    /**
-     * Переполненная камера (4 примыкания) в радиусе 10 м отсекается,
-     * создается кандидат {@link TieInType#NEW_CHAMBER}
-     */
     @Test
     @DisplayName("Переполненная камера -> NEW_CHAMBER")
     void fullChamberWithin10mFallsBackToNewChamber() {
@@ -262,11 +263,13 @@ class TieInCandidateIntegrationTest extends AbstractIntegrationTest {
         assertThat(best.getExistingChamberId()).isNull();
         assertThat(best.getCost()).isEqualTo(3_000_000L);
         assertThat(best.getNewChamberDiameter()).isEqualTo(200);
+
+        assertThat(best.getTargetLongitude())
+                .isEqualTo(best.getTieInLongitude());
+        assertThat(best.getTargetLatitude())
+                .isEqualTo(best.getTieInLatitude());
     }
 
-    /**
-     * Изоляция по upload_id: объекты другой сессии не учитываются
-     */
     @Test
     @DisplayName("Изоляция по upload_id")
     void isolationByUploadId() {
@@ -287,10 +290,6 @@ class TieInCandidateIntegrationTest extends AbstractIntegrationTest {
         assertThat(candidates).isEmpty();
     }
 
-    /**
-     * Пакетный поиск кандидатов по всем точкам загрузки.
-     * Возвращается карта feature_id -> список кандидатов
-     */
     @Test
     @DisplayName("Пакетный поиск кандидатов")
     void batchFindCandidates() {

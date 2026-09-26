@@ -11,9 +11,21 @@ import java.util.Objects;
  * ({@link TieInType#EXISTING_CHAMBER}), либо строительство новой
  * камеры на выбранном участке сети
  * ({@link TieInType#NEW_CHAMBER}). Отдельный объект {@code tie_in}
- * не формируется: присоединение всегда идет через тепловую камеру.
- * <p>Класс immutable. Сознательно реализован без Lombok, чтобы
- * не зависеть от обработки аннотаций в IDE и на этапе javac
+ * не формируется: присоединение всегда идёт через тепловую камеру
+ * <p>Координаты кандидата разделены на два смысловых поля:
+ * <ul>
+ *     <li>{@code tieInLongitude}/{@code tieInLatitude} — точка
+ *     присоединения <b>на существующей сети</b>, результат
+ *     {@code GeometryUtils.nearestPointOnGeometry}. Для отладки
+ *     и для расчёта расстояний;</li>
+ *     <li>{@code targetLongitude}/{@code targetLatitude} — фактическая
+ *     конечная точка маршрута. Для {@link TieInType#EXISTING_CHAMBER}
+ *     это координаты <b>камеры</b> (ТП, п. 2.4: «Новый участок сети
+ *     заканчивается в ней»), для {@link TieInType#NEW_CHAMBER} —
+ *     точка на сети, где создаётся новая камера.</li>
+ * </ul>
+ * Именно {@code targetXxx} используется {@code TraceOrchestrator}
+ * как {@code endUtm} при поиске пути
  */
 @Schema(description = "Кандидат на присоединение")
 public final class TieInCandidate {
@@ -25,6 +37,8 @@ public final class TieInCandidate {
     private final String existingChamberId;
     private final double tieInLongitude;
     private final double tieInLatitude;
+    private final double targetLongitude;
+    private final double targetLatitude;
     private final double distanceToNetworkM;
     private final double distanceToChamberM;
     private final int currentAttachments;
@@ -39,6 +53,8 @@ public final class TieInCandidate {
         this.existingChamberId = b.existingChamberId;
         this.tieInLongitude = b.tieInLongitude;
         this.tieInLatitude = b.tieInLatitude;
+        this.targetLongitude = b.targetLongitude;
+        this.targetLatitude = b.targetLatitude;
         this.distanceToNetworkM = b.distanceToNetworkM;
         this.distanceToChamberM = b.distanceToChamberM;
         this.currentAttachments = b.currentAttachments;
@@ -46,10 +62,7 @@ public final class TieInCandidate {
         this.newChamberDiameter = b.newChamberDiameter;
     }
 
-    /**
-     * Создает новый билдер кандидата
-     * @return билдер
-     */
+    /** @return новый билдер кандидата */
     public static Builder builder() {
         return new Builder();
     }
@@ -79,14 +92,32 @@ public final class TieInCandidate {
         return existingChamberId;
     }
 
-    /** @return долгота точки присоединения в WGS 84 */
+    /** @return долгота точки присоединения на сети в WGS 84 */
     public double getTieInLongitude() {
         return tieInLongitude;
     }
 
-    /** @return широта точки присоединения в WGS 84 */
+    /** @return широта точки присоединения на сети в WGS 84 */
     public double getTieInLatitude() {
         return tieInLatitude;
+    }
+
+    /**
+     * @return долгота целевой точки маршрута в WGS 84.
+     *         Для {@link TieInType#EXISTING_CHAMBER} - координата
+     *         камеры; для {@link TieInType#NEW_CHAMBER} - точка
+     *         присоединения на сети
+     */
+    public double getTargetLongitude() {
+        return targetLongitude;
+    }
+
+    /**
+     * @return широта целевой точки маршрута в WGS 84. См.
+     *         {@link #getTargetLongitude()}.
+     */
+    public double getTargetLatitude() {
+        return targetLatitude;
     }
 
     /** @return расстояние от точки подключения до сети, м */
@@ -125,30 +156,26 @@ public final class TieInCandidate {
         TieInCandidate that = (TieInCandidate) o;
         return Double.compare(that.tieInLongitude, tieInLongitude) == 0
                 && Double.compare(that.tieInLatitude, tieInLatitude) == 0
-                && Double.compare(that.distanceToNetworkM,
-                        distanceToNetworkM) == 0
-                && Double.compare(that.distanceToChamberM,
-                        distanceToChamberM) == 0
+                && Double.compare(that.targetLongitude, targetLongitude) == 0
+                && Double.compare(that.targetLatitude, targetLatitude) == 0
+                && Double.compare(that.distanceToNetworkM, distanceToNetworkM) == 0
+                && Double.compare(that.distanceToChamberM, distanceToChamberM) == 0
                 && currentAttachments == that.currentAttachments
                 && cost == that.cost
                 && Objects.equals(id, that.id)
-                && Objects.equals(connectionPointId,
-                        that.connectionPointId)
+                && Objects.equals(connectionPointId, that.connectionPointId)
                 && Objects.equals(heatNetworkId, that.heatNetworkId)
                 && type == that.type
-                && Objects.equals(existingChamberId,
-                        that.existingChamberId)
-                && Objects.equals(newChamberDiameter,
-                        that.newChamberDiameter);
+                && Objects.equals(existingChamberId, that.existingChamberId)
+                && Objects.equals(newChamberDiameter, that.newChamberDiameter);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(id, connectionPointId, heatNetworkId,
-                type, existingChamberId, tieInLongitude,
-                tieInLatitude, distanceToNetworkM,
-                distanceToChamberM, currentAttachments, cost,
-                newChamberDiameter);
+                type, existingChamberId, tieInLongitude, tieInLatitude,
+                targetLongitude, targetLatitude, distanceToNetworkM,
+                distanceToChamberM, currentAttachments, cost, newChamberDiameter);
     }
 
     @Override
@@ -161,6 +188,8 @@ public final class TieInCandidate {
                 + ", existingChamberId='" + existingChamberId + '\''
                 + ", tieInLongitude=" + tieInLongitude
                 + ", tieInLatitude=" + tieInLatitude
+                + ", targetLongitude=" + targetLongitude
+                + ", targetLatitude=" + targetLatitude
                 + ", distanceToNetworkM=" + distanceToNetworkM
                 + ", distanceToChamberM=" + distanceToChamberM
                 + ", currentAttachments=" + currentAttachments
@@ -181,6 +210,8 @@ public final class TieInCandidate {
         private String existingChamberId;
         private double tieInLongitude;
         private double tieInLatitude;
+        private double targetLongitude;
+        private double targetLatitude;
         private double distanceToNetworkM;
         private double distanceToChamberM;
         private int currentAttachments;
@@ -222,6 +253,16 @@ public final class TieInCandidate {
 
         public Builder tieInLatitude(double tieInLatitude) {
             this.tieInLatitude = tieInLatitude;
+            return this;
+        }
+
+        public Builder targetLongitude(double targetLongitude) {
+            this.targetLongitude = targetLongitude;
+            return this;
+        }
+
+        public Builder targetLatitude(double targetLatitude) {
+            this.targetLatitude = targetLatitude;
             return this;
         }
 
