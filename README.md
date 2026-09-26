@@ -12,9 +12,9 @@ moscow-heat-trace-service/
 ├── src/
 │   ├── main/
 │   │   ├── java/ru/moscow/heat/
-│   │   │   ├── geojson/                       # Все, что связано с приёмом, парсингом и хранением входного GeoJSON
+│   │   │   ├── geojson/                       # Всё, что связано с приёмом, парсингом и хранением входного GeoJSON
 │   │   │   │   ├── config/
-│   │   │   │   │   ├── AsyncConfig.java                    # Пул потоков для @Async-парсинга (2–4 потока) + @EnableScheduling для cron-очистки
+│   │   │   │   │   ├── AsyncConfig.java                    # Пул потоков для @Async-парсинга и трассировки (2–4 потока) + @EnableScheduling для cron-очистки
 │   │   │   │   │   └── SpatialIndexInitializer.java        # Идемпотентно создаёт GIST-индексы на geom/geom_utm после старта Hibernate DDL
 │   │   │   │   ├── controller/
 │   │   │   │   │   └── GeoJsonUploadController.java        # REST: POST /api/geojson/upload, GET /api/geojson/uploads/{id}; обработчики 400/404/500
@@ -48,7 +48,7 @@ moscow-heat-trace-service/
 │   │   │   │   │   ├── CoordinateTransformService.java     # Proj4J: EPSG:4326 ↔ EPSG:32637, точка и геометрия, без потери точности
 │   │   │   │   │   ├── GeoFeatureBatchWriter.java          # Транзакционная пакетная запись GeoFeature + типизированных через GeoObjectPersister
 │   │   │   │   │   ├── GeoJsonAsyncProcessor.java          # @Async-обработка загрузки: чтение temp-файла, обновление сессии, гарантированный cleanup
-│   │   │   │   │   ├── GeoJsonParserService.java           # Потоковый парсер GeoJSON: структура, атрибуты, типы геометрии, дедупликация id, батчи
+│   │   │   │   │   ├── GeoJsonParserService.java           # Потоковый парсер GeoJSON: структура, атрибуты, типы геометрии, дедупликация id, батчи; id — строка или число
 │   │   │   │   │   ├── GeoJsonUploadService.java           # Приём файла → temp-диск → создание сессии → запуск @Async-обработки; чтение статуса
 │   │   │   │   │   ├── GeometryConverterService.java       # Ручной GeoJSON ↔ JTS через JsonNode (в обход jts-io-common, чтобы не терять разряды double)
 │   │   │   │   │   ├── GeoObjectPersister.java             # Раскладка GeoFeature по 5 типизированным таблицам согласно object_type
@@ -60,33 +60,54 @@ moscow-heat-trace-service/
 │   │   │   ├── health/controller/
 │   │   │   │   └── HealthController.java                   # GET /api/health: статус сервиса
 │   │   │   │
-│   │   │   ├── spatial/                       # Нормативные справочники и утилиты геометрии (итерация 3)
-│   │   │   │   ├── ChamberCostTable.java         [NEW]    # Таблица 3.2 ТП: стоимость новой камеры по наибольшему ДУ (3/5/8/12 млн)
+│   │   │   ├── spatial/                       # Нормативные справочники и утилиты геометрии
+│   │   │   │   ├── ChamberCostTable.java                   # Таблица 3.2 ТП: стоимость новой камеры по наибольшему ДУ (3/5/8/12 млн)
 │   │   │   │   ├── ConsistencyReport.java                  # Отчёт валидации: valid + errors + warnings
 │   │   │   │   ├── DiameterSpec.java                       # Строка Таблицы 1: ДУ, пропускная, предельная длина, цена, габариты пары
 │   │   │   │   ├── DiameterTable.java                      # Таблица 1 ТП: minDiameterForFlow, minDiameterForFlowAndLength, nextDiameter, largestOf
 │   │   │   │   ├── GeometryUtils.java                      # Метрические операции в UTM: длина, расстояние, ближайшая точка, пересечение, угол, буфер, точка на линии
-│   │   │   │   ├── OksConnectionPointResolver.java         # ST_Contains: точка ОКС → полигон restriction_type=oks; список unbound-точек
+│   │   │   │   ├── OksConnectionPointResolver.java         # ST_Contains: точка ОКС → полигон restriction_type=oks; список unbound-точек; resolvePolygonDatabaseId для ignore-set
 │   │   │   │   ├── RestrictionRule.java                    # Строка Таблицы 2: правило, мин.расстояние, угол, Kспец, габарит, padding спецзоны
 │   │   │   │   ├── RestrictionRuleRegistry.java            # Реестр правил по restriction_type + шкала отступа до ОКС (5/7/9 м по ДУ)
 │   │   │   │   ├── RestrictionRuleType.java                # FORBIDDEN / SPECIAL_CROSSING
 │   │   │   │   └── UploadConsistencyValidator.java         # Пред-трассировочная валидация: один source, точки с flow_tph>0, диаметры>0, уникальность id
 │   │   │   │
-│   │   │   ├── trace/                         # Управление сессиями трассировки + подбор кандидатов (итерация 4)
+│   │   │   ├── trace/                         # Трассировка новой сети: граф видимости, A*, постобработка
 │   │   │   │   ├── controller/
-│   │   │   │   │   └── TraceController.java                # POST /api/trace/{uploadId}, GET /api/trace/{traceId} (501), GET /candidates
+│   │   │   │   │   └── TraceController.java                # POST /api/trace/{uploadId}, GET /api/trace/{traceId}, GET /candidates
 │   │   │   │   ├── dto/
-│   │   │   │   │   ├── PointGeoJsonSerializer.java [NEW]   # Jackson-сериализатор JTS Point → GeoJSON (для REST-ответов)
-│   │   │   │   │   ├── TieInCandidate.java         [NEW]   # Immutable DTO кандидата: тип, координаты, расстояния, примыкания, стоимость
-│   │   │   │   │   ├── TieInType.java              [NEW]   # EXISTING_CHAMBER / NEW_CHAMBER
+│   │   │   │   │   ├── PointGeoJsonSerializer.java         # Jackson-сериализатор JTS Point → GeoJSON (для REST-ответов)
+│   │   │   │   │   ├── TieInCandidate.java                 # Immutable DTO кандидата: тип, точки (tie-in + target), расстояния, примыкания, стоимость
+│   │   │   │   │   ├── TieInType.java                      # EXISTING_CHAMBER / NEW_CHAMBER
 │   │   │   │   │   ├── TraceAcceptedResponse.java          # Ответ 202: traceId + statusUrl
-│   │   │   │   │   ├── TraceStatus.java                    # PENDING/PROCESSING/COMPLETED/FAILED/NOT_IMPLEMENTED
-│   │   │   │   │   └── TraceStatusResponse.java            # Публичный ответ GET /api/trace/{traceId}
+│   │   │   │   │   ├── TraceStatus.java                    # PENDING/PROCESSING/COMPLETED/FAILED
+│   │   │   │   │   └── TraceStatusResponse.java            # Публичный ответ GET /api/trace/{traceId}: статус, тайминги, счётчики, список неподключённых
 │   │   │   │   ├── exception/
 │   │   │   │   │   └── TraceNotFoundException.java         # Задача трассировки не найдена → HTTP 404
+│   │   │   │   ├── graph/                     # Модель препятствий и граф видимости
+│   │   │   │   │   ├── GraphNode.java                      # Внутренний узел графа: id, x/y UTM, Kind (FORBIDDEN_CORNER / SPECIAL_CORNER / EXISTING_NETWORK_ENDPOINT)
+│   │   │   │   │   ├── ObstacleModel.java                  # Подготовленные FORBIDDEN и SPECIAL зоны с envelope, PreparedGeometry и STRtree-индексами
+│   │   │   │   │   ├── ObstacleModelBuilder.java           # Строит ObstacleModel: буфер по правилу, TopologyPreservingSimplifier 1 м, раскладка FORBIDDEN/SPECIAL
+│   │   │   │   │   └── VisibilityGraph.java                # Узлы — углы FORBIDDEN-буферов (дедуп по spatial grid), A* с эвристикой, ignore-set для своего полигона ОКС
+│   │   │   │   ├── model/                     # DTO маршрута
+│   │   │   │   │   ├── LayingMethod.java                   # BASE / SPECIAL
+│   │   │   │   │   ├── NewChamber.java                     # Новая тепловая камера: точка UTM, диаметр, стоимость (заготовка под итерацию 7)
+│   │   │   │   │   ├── RouteNode.java                      # Узел маршрута: id, тип, координата UTM, source_feature_id
+│   │   │   │   │   ├── RouteNodeType.java                  # OKS_POINT / EXISTING_CHAMBER / NEW_CHAMBER / TECHNICAL_NODE / CORNER
+│   │   │   │   │   ├── RouteSegment.java                   # Отрезок маршрута: узлы, геометрия UTM, flow, ДУ, способ прокладки, Kспец, длина, cost (null)
+│   │   │   │   │   ├── TechnicalNode.java                  # Служебная точка смены ДУ / способа прокладки / границы спецзоны
+│   │   │   │   │   ├── TraceResult.java                    # Итог трассировки: сегменты, камеры, техузлы, неподключённые, счётчики
+│   │   │   │   │   └── UnconnectedOks.java                 # Неподключённый ОКС: feature_id, Reason, детали
 │   │   │   │   └── service/
-│   │   │   │       ├── TieInCandidateService.java  [NEW]   # Алгоритм итерации 4: ближайший heat_network → tie-in point → камеры ≤10м и ≤4 примыканий → EXISTING или NEW
-│   │   │   │       └── TraceService.java                   # In-memory сессии трассировки (traceId→uploadId), отдаёт кандидатов
+│   │   │   │       ├── AngleChecker.java                   # Проверка угла пересечения road/tram_tracks ≥ 45°; коллинеарные — недопустимо
+│   │   │   │       ├── DiameterAssigner.java               # Назначение ДУ сегментам по flow и накопленной длине; техузлы смены ДУ; ДУ не убывает к tie-in
+│   │   │   │       ├── LengthValidator.java                # Проверка предельной длины непрерывной части одного ДУ; защитная проверка перед сборкой TraceResult
+│   │   │   │       ├── RouteSegmentSplitter.java           # Разбиение пути по границам спецзон; сохранение топологии RouteNode между соседними сегментами
+│   │   │   │       ├── RouteSimplifier.java                # String-pulling с envelope prefilter + PreparedGeometry + STRtree; ignore-set для первого сегмента
+│   │   │   │       ├── TieInCandidateService.java          # Алгоритм: ближайший heat_network → tie-in → камеры ≤10 м и ≤4 примыканий → EXISTING или NEW
+│   │   │   │       ├── TraceAsyncProcessor.java            # @Async-обработка трассировки: markProcessing → run → markCompleted / markFailed
+│   │   │   │       ├── TraceOrchestrator.java              # Главный конвейер на ОКС: кандидат → ignore-set → A* → simplify → angles → split → diameter → validate
+│   │   │   │       └── TraceService.java                   # In-memory сессии: traceId → uploadId → TraceResult; статусы, кандидаты, счётчики
 │   │   │   │
 │   │   │   └── HeatTraceServiceApplication.java            # Точка входа Spring Boot
 │   │   │
@@ -106,7 +127,7 @@ moscow-heat-trace-service/
 │       │   │   ├── service/
 │       │   │   │   ├── CoordinateTransformServiceTest.java # Трансформация, SRID, round-trip, диапазон зоны 37N
 │       │   │   │   ├── GeoJsonAsyncProcessorTest.java      # PENDING→COMPLETED/FAILED, cleanup файла
-│       │   │   │   ├── GeoJsonParserServiceTest.java       # Позитивы, негативы, CRS, удалённые типы, дубликаты, типы атрибутов
+│       │   │   │   ├── GeoJsonParserServiceTest.java       # Позитивы, негативы, CRS, удалённые типы, дубликаты, типы атрибутов, числовой id
 │       │   │   │   ├── GeoJsonUploadServiceTest.java       # Приём файла, дефолтное имя, битый summary, 404
 │       │   │   │   ├── GeometryConverterMultiLineStringTest.java # MultiLineString: разбор и round-trip
 │       │   │   │   ├── GeometryConverterServiceTest.java   # Point/LineString/MultiPolygon round-trip с допуском 1e-9
@@ -122,17 +143,25 @@ moscow-heat-trace-service/
 │       │   ├── spatial/
 │       │   │   ├── DiameterTableTest.java                  # Все 18 строк Таблицы 1 + границы подбора + next + largestOf
 │       │   │   ├── GeometryUtilsTest.java                  # Длина, расстояние, угол, буфер, точка на линии (UTM 37N)
-│       │   │   ├── OksConnectionPointResolverTest.java     # ST_Contains: внутри/вне/на границе + изоляция по upload_id
+│       │   │   ├── OksConnectionPointResolverTest.java     # ST_Contains: внутри/вне/на границе + изоляция по upload_id + resolvePolygonDatabaseId
 │       │   │   ├── RestrictionRuleRegistryTest.java        # Таблица 2 ТП: все правила, Kспец, шкала отступа для oks
 │       │   │   └── UploadConsistencyValidatorTest.java     # errors vs warnings на каждом сценарии
 │       │   │
 │       │   ├── trace/
 │       │   │   ├── controller/
-│       │   │   │   └── TraceControllerTest.java            # @WebMvcTest: 202/501/404/200 для /candidates
+│       │   │   │   └── TraceControllerTest.java            # @WebMvcTest: 202/404/200, verify async process
+│       │   │   ├── graph/
+│       │   │   │   └── VisibilityGraphTest.java            # Пустой ObstacleModel, обход прямоугольника, ignore-set для старта внутри полигона
 │       │   │   └── service/
-│       │   │       ├── TieInCandidateIntegrationTest.java  [NEW] # PostGIS: countConnections (0/1/2/4 + транзит), EXISTING/NEW, изоляция
-│       │   │       ├── TieInCandidateServiceTest.java      [NEW] # Mockito: границы 10 м, 1–4 примыканий, стоимость камеры, сортировка
-│       │   │       └── TraceServiceTest.java               # Mockito: создание сессии, статус, кандидаты, 404
+│       │   │       ├── AngleCheckerTest.java               # 90°, ровно 45°, 30°, коллинеарные, нет пересечения, дефолт
+│       │   │       ├── DiameterAssignerTest.java           # Постоянный ДУ, рост на превышении длины, ДУ не убывает
+│       │   │       ├── LengthValidatorTest.java            # В пределах/превышение, сброс счётчика при смене ДУ, неизвестный ДУ
+│       │   │       ├── RouteSegmentSplitterTest.java       # Разбиение BASE/SPECIAL, end_node_id == start_node_id, тип конечного узла, METHOD_CHANGE
+│       │   │       ├── RouteSimplifierTest.java            # Склейка коллинеарных, обход препятствия, ignore-set
+│       │   │       ├── TieInCandidateIntegrationTest.java  # PostGIS: countConnections (0/1/2/4 + транзит), EXISTING/NEW, target-координаты, изоляция
+│       │   │       ├── TieInCandidateServiceTest.java      # Mockito: границы 10 м, 1–4 примыканий, target vs tie-in, стоимость камеры, сортировка
+│       │   │       ├── TraceOrchestratorIntegrationTest.java # E2E на PostGIS: один ОКС внутри своего полигона → COMPLETED, NEW_CHAMBER, счётчики
+│       │   │       └── TraceServiceTest.java               # Mockito: сессия, статусы PENDING/PROCESSING/COMPLETED/FAILED, кандидаты, 404
 │       │   │
 │       │   └── AbstractIntegrationTest.java                # @SpringBootTest + singleton PostGIS-контейнер через Testcontainers
 │       │
