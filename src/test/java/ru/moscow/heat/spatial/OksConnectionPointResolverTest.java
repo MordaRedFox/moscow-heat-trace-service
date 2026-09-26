@@ -19,6 +19,7 @@ import ru.moscow.heat.geojson.service.CoordinateTransformService;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,7 +35,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>точка вне любого полигона;</li>
  *   <li>несколько точек в одном полигоне;</li>
  *   <li>точка на границе полигона (не входит в ST_Contains);</li>
- *   <li>изоляция по upload_id между разными сессиями.</li>
+ *   <li>изоляция по upload_id между разными сессиями;</li>
+ *   <li>получение database-id полигона, содержащего точку
+ *       ({@link OksConnectionPointResolver#resolvePolygonDatabaseId(UUID, String)}),
+ *       - используется {@code TraceOrchestrator} для ignore-set при
+ *       обходе собственного полигона ОКС.</li>
  * </ul>
  */
 @DisplayName("Тестирование резолвера точек подключения ОКС")
@@ -252,5 +257,79 @@ class OksConnectionPointResolverTest
         List<String> unbound =
                 resolver.findUnboundConnectionPoints(uploadId);
         assertThat(unbound).containsExactly("pt_current");
+    }
+
+    /**
+     * {@code resolvePolygonDatabaseId} для точки внутри полигона
+     * возвращает id соответствующей записи {@code restriction}.
+     * Этот метод используется {@code TraceOrchestrator}, чтобы
+     * собрать ignore-set для обхода собственного полигона ОКС
+     * (разъяснения п. 3 ТП)
+     */
+    @Test
+    @DisplayName("resolvePolygonDatabaseId: точка внутри → id полигона")
+    void shouldResolvePolygonDatabaseIdForPointInside() {
+        RestrictionEntity polygon = createOksPolygon(uploadId, "poly_db_id",
+                baseX, baseY, baseX + 100, baseY + 100);
+        createConnectionPoint(uploadId, "pt_db_inside",
+                baseX + 50, baseY + 50);
+
+        Optional<Long> resolved = resolver
+                .resolvePolygonDatabaseId(uploadId, "pt_db_inside");
+
+        assertThat(resolved).isPresent();
+        assertThat(resolved.get()).isEqualTo(polygon.getId());
+    }
+
+    /**
+     * {@code resolvePolygonDatabaseId} для точки вне полигона
+     * возвращает {@code Optional.empty()} - трассировка пойдет
+     * без исключений из FORBIDDEN-зон
+     */
+    @Test
+    @DisplayName("resolvePolygonDatabaseId: точка вне полигона → empty")
+    void shouldNotResolvePolygonDatabaseIdForPointOutside() {
+        createOksPolygon(uploadId, "poly_db_out",
+                baseX, baseY, baseX + 100, baseY + 100);
+        createConnectionPoint(uploadId, "pt_db_outside",
+                baseX + 500, baseY + 500);
+
+        Optional<Long> resolved = resolver
+                .resolvePolygonDatabaseId(uploadId, "pt_db_outside");
+
+        assertThat(resolved).isEmpty();
+    }
+
+    /**
+     * {@code resolvePolygonDatabaseId} для точки на границе полигона
+     * возвращает {@code Optional.empty()}: {@code ST_Contains} не
+     * считает границу внутренней областью. Поведение согласовано
+     * с {@link #shouldTreatPointOnBoundaryAsUnbound()}
+     */
+    @Test
+    @DisplayName("resolvePolygonDatabaseId: точка на границе → empty")
+    void shouldNotResolvePolygonDatabaseIdForPointOnBoundary() {
+        createOksPolygon(uploadId, "poly_db_border",
+                baseX, baseY, baseX + 100, baseY + 100);
+        createConnectionPoint(uploadId, "pt_db_on_border",
+                baseX + 50, baseY);
+
+        Optional<Long> resolved = resolver
+                .resolvePolygonDatabaseId(uploadId, "pt_db_on_border");
+
+        assertThat(resolved).isEmpty();
+    }
+
+    /**
+     * {@code resolvePolygonDatabaseId} с неизвестным feature_id
+     * возвращает {@code Optional.empty()}, не бросая исключения
+     */
+    @Test
+    @DisplayName("resolvePolygonDatabaseId: неизвестный feature_id → empty")
+    void shouldReturnEmptyForUnknownFeatureId() {
+        Optional<Long> resolved = resolver
+                .resolvePolygonDatabaseId(uploadId, "does-not-exist");
+
+        assertThat(resolved).isEmpty();
     }
 }
