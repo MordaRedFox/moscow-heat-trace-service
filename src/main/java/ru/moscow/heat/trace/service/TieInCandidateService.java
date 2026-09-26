@@ -31,21 +31,24 @@ import java.util.UUID;
  * <p>Для каждой точки подключения {@code oks_connection_point}:
  * <ol>
  *   <li>Находит ближайший участок {@code heat_network}.</li>
- *   <li>Определяет точку присоединения как ближайшую точку на
- *       этом участке.</li>
- *   <li>Ищет существующие {@code heat_chamber} в радиусе 10 м
- *       от точки присоединения.</li>
- *   <li>Для каждой камеры проверяет число примыкающих участков:
- *       если их не более четырех, формирует кандидата
+ *   <li>Определяет точку присоединения на сети.</li>
+ *   <li>Ищет существующие {@code heat_chamber} в радиусе 10 м.</li>
+ *   <li>Для каждой камеры проверяет число примыканий
+ *       ({@code <= MAX_ATTACHMENTS - 1}) и формирует кандидата
  *       {@link TieInType#EXISTING_CHAMBER}.</li>
- *   <li>Если подходящих камер нет, формирует кандидата
- *       {@link TieInType#NEW_CHAMBER} с расчетом ДУ и стоимости
+ *   <li>Если подходящих камер нет — формирует кандидата
+ *       {@link TieInType#NEW_CHAMBER} с ДУ и стоимостью
  *       по таблице 3.2 ТП.</li>
  * </ol>
  * <p>Возвращаемый список отсортирован по приоритету: сначала
  * существующие камеры (по возрастанию расстояния, затем по числу
- * примыканий), затем новая камера. Первый элемент - рекомендуемый
+ * примыканий), затем новая камера. Первый элемент — рекомендуемый
  * кандидат
+ * <p>Координаты кандидата разделены на два поля:
+ * {@code tieInXxx} — точка на существующей сети (для отладки),
+ * {@code targetXxx} — фактическая конечная точка маршрута:
+ * камера для {@link TieInType#EXISTING_CHAMBER} и точка
+ * присоединения на сети для {@link TieInType#NEW_CHAMBER}
  */
 @Service
 @RequiredArgsConstructor
@@ -74,10 +77,9 @@ public class TieInCandidateService {
      * Подбирает список кандидатов на присоединение для одной точки
      * подключения ОКС
      * @param uploadId          идентификатор сессии загрузки
-     * @param connectionPointId идентификатор oks_connection_point
+     * @param connectionPointId идентификатор {@code oks_connection_point}
      * @return список кандидатов, отсортированных по приоритету;
-     *         пустой список, если участок сети для присоединения
-     *         не найден
+     *         пустой список, если участок сети не найден
      * @throws IllegalArgumentException если точка подключения
      *                                  не найдена в загрузке
      */
@@ -155,9 +157,6 @@ public class TieInCandidateService {
     /**
      * Подбирает кандидатов на присоединение для всех точек
      * подключения ОКС указанной загрузки
-     * <p>Ключом отображения служит {@code feature_id} точки
-     * подключения. Порядок ключей соответствует порядку точек,
-     * возвращенному репозиторием
      * @param uploadId идентификатор сессии загрузки
      * @return отображение {@code feature_id} точки подключения в
      *         список кандидатов
@@ -168,35 +167,19 @@ public class TieInCandidateService {
 
         List<OksConnectionPointEntity> points =
                 oksRepo.findByUploadId(uploadId);
-        Map<String, List<TieInCandidate>> result =
-                new LinkedHashMap<>();
+        Map<String, List<TieInCandidate>> result = new LinkedHashMap<>();
         for (OksConnectionPointEntity point : points) {
             result.put(
                     point.getFeatureId(),
-                    findCandidates(
-                            uploadId, point.getFeatureId()));
+                    findCandidates(uploadId, point.getFeatureId()));
         }
         return result;
     }
 
     /**
-     * Устаревшее имя метода {@link #findCandidatesForAllPoints}.
-     * Сохранено для совместимости с существующими вызовами
-     * @param uploadId идентификатор сессии загрузки
-     * @return отображение {@code feature_id} точки подключения в
-     *         список кандидатов
-     * @deprecated используйте
-     *             {@link #findCandidatesForAllPoints(UUID)}
-     */
-    @Deprecated
-    @Transactional(readOnly = true)
-    public Map<String, List<TieInCandidate>> findCandidatesForUpload(
-            UUID uploadId) {
-        return findCandidatesForAllPoints(uploadId);
-    }
-
-    /**
-     * Формирует кандидата на врезку в существующую камеру
+     * Формирует кандидата на врезку в существующую камеру.
+     * {@code targetXxx} = координаты камеры: по ТП маршрут
+     * заканчивается именно в ней, а не в точке на сети
      */
     private TieInCandidate buildExistingChamberCandidate(
             OksConnectionPointEntity point,
@@ -207,6 +190,7 @@ public class TieInCandidateService {
             double distanceToChamber,
             int attachments) {
 
+        Point chamberPoint = (Point) chamber.getGeometry();
         String id = "cand_" + point.getFeatureId()
                 + "_ch_" + chamber.getFeatureId();
         return TieInCandidate.builder()
@@ -217,6 +201,8 @@ public class TieInCandidateService {
                 .existingChamberId(chamber.getFeatureId())
                 .tieInLongitude(tieInPoint.getX())
                 .tieInLatitude(tieInPoint.getY())
+                .targetLongitude(chamberPoint.getX())
+                .targetLatitude(chamberPoint.getY())
                 .distanceToNetworkM(distanceToNetwork)
                 .distanceToChamberM(distanceToChamber)
                 .currentAttachments(attachments)
@@ -227,9 +213,8 @@ public class TieInCandidateService {
 
     /**
      * Формирует кандидата на строительство новой камеры в точке
-     * присоединения. ДУ камеры - максимум из ДУ существующего
-     * примыкающего участка и минимального ДУ нового участка,
-     * подобранного по расходу точки подключения
+     * присоединения на сети. {@code targetXxx} = {@code tieInPoint}:
+     * камера создаётся именно там
      */
     private TieInCandidate buildNewChamberCandidate(
             OksConnectionPointEntity point,
@@ -256,6 +241,8 @@ public class TieInCandidateService {
                 .existingChamberId(null)
                 .tieInLongitude(tieInPoint.getX())
                 .tieInLatitude(tieInPoint.getY())
+                .targetLongitude(tieInPoint.getX())
+                .targetLatitude(tieInPoint.getY())
                 .distanceToNetworkM(distanceToNetwork)
                 .distanceToChamberM(0.0)
                 .currentAttachments(0)

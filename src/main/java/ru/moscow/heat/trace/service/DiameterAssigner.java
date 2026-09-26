@@ -33,7 +33,7 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class DiameterAssigner {
 
-    /** Результат: сегменты с назначенным ДУ + технические узлы смены ДУ. */
+    /** Результат: сегменты с назначенным ДУ + технические узлы смены ДУ */
     public static final class AssignmentResult {
         private final List<RouteSegment> segments;
         private final List<TechnicalNode> technicalNodes;
@@ -57,8 +57,7 @@ public class DiameterAssigner {
     /**
      * Проходит сегменты от ОКС к tie-in (порядок важен!) и заполняет
      * {@code diameterMm} для каждого, вставляя технические узлы там,
-     * где ДУ увеличивается.
-     *
+     * где ДУ увеличивается
      * @param orderedSegmentsFromOksToTieIn сегменты одного маршрута,
      *                                       упорядоченные от ОКС к tie-in
      * @param flowTph                       расход ОКС, т/ч

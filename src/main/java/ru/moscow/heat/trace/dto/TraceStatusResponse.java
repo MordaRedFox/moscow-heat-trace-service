@@ -9,20 +9,12 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Статус сессии трассировки, отдаваемый {@code GET /api/trace/{traceId}}.
- * <p>
- * ВНИМАНИЕ: этот файл переписан для итерации 5 (реальная трассировка вместо
- * заглушки {@code NOT_IMPLEMENTED}) на основе того, как класс использовался
- * в уже присланном {@code TraceService}/{@code TraceController}
- * (конструктор {@code (traceId, status, createdAt)}, поля traceId/status).
- * Если в вашей текущей версии класса были другие поля, которых я не видел —
- * пришлите файл, смёржим.
- * <p>
- * Иммутабельный DTO с билдером — по образцу {@code TieInCandidate}.
+ * Статус сессии трассировки, отдаваемый {@code GET /api/trace/{traceId}}
+ * Иммутабельный DTO с билдером - по образцу {@code TieInCandidate}.
  * Поля {@code totalOksCount}/{@code connectedCount}/{@code unconnectedCount}/
  * {@code unconnectedOksFeatureIds} заполняются только при {@code status == COMPLETED}
  * (ТЗ, п.2.9-2.10: сервис должен явно показывать перечень ОКС без маршрута).
- * {@code errorMessage} заполняется только при {@code status == FAILED}.
+ * {@code errorMessage} заполняется только при {@code status == FAILED}
  */
 @Schema(description = "Статус сессии трассировки")
 public final class TraceStatusResponse {
@@ -54,7 +46,7 @@ public final class TraceStatusResponse {
     /**
      * Конструктор для обратной совместимости с существующими вызовами вида
      * {@code new TraceStatusResponse(traceId, status, createdAt)}.
-     * Эквивалентен {@code builder().traceId(...).status(...).createdAt(...).build()}.
+     * Эквивалентен {@code builder().traceId(...).status(...).createdAt(...).build()}
      */
     public TraceStatusResponse(UUID traceId, TraceStatus status, Instant createdAt) {
         this(builder().traceId(traceId).status(status).createdAt(createdAt));
@@ -64,7 +56,10 @@ public final class TraceStatusResponse {
         return new Builder();
     }
 
-    /** Создаёт копию с изменённым статусом и прочими полями через билдер на основе текущего состояния. */
+    /**
+     * Создаёт копию с изменённым статусом и прочими полями через билдер на
+     * основе текущего состояния
+     * */
     public Builder toBuilder() {
         return builder()
                 .traceId(traceId)

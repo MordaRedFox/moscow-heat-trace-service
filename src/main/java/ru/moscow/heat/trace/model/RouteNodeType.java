@@ -1,9 +1,7 @@
 package ru.moscow.heat.trace.model;
 
 /**
- * Тип узла маршрута новой тепловой сети.
- * <p>
- * Итерация 5, п.3 "Пакет trace/model".
+ * Тип узла маршрута новой тепловой сети
  */
 public enum RouteNodeType {
 
