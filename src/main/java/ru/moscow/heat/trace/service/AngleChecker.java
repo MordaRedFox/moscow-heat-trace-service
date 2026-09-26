@@ -1,7 +1,6 @@
 package ru.moscow.heat.trace.service;
 
 import org.locationtech.jts.geom.Coordinate;
-import org.locationtech.jts.geom.LineString;
 import org.springframework.stereotype.Service;
 
 /**
@@ -27,8 +26,8 @@ public class AngleChecker {
      * @param crossedAxis  геометрия оси пересекаемого объекта (LineString), UTM
      * @return {@code true}, если угол пересечения ≥ 45°
      */
-    public boolean isCrossingAngleValid(Coordinate segmentStart, Coordinate segmentEnd, LineString crossedAxis) {
-        // TODO:
+    public boolean isCrossingAngleValid(Coordinate segmentStart, Coordinate segmentEnd, Object crossedAxis) {
+        // TODO: замените Object на org.locationtech.jts.geom.LineString.
         // 1. найти точку пересечения segmentStart-segmentEnd с crossedAxis;
         // 2. взять направляющий вектор маршрута и направляющий вектор оси
         //    в окрестности точки пересечения;

@@ -21,18 +21,19 @@ public final class UnconnectedOks {
         PATH_REJECTED_BY_VALIDATION
     }
 
-    private final Long oksPointId;
+    /** feature_id точки подключения ОКС (oks_connection_point.feature_id). */
+    private final String oksPointFeatureId;
     private final Reason reason;
     private final String details;
 
-    public UnconnectedOks(Long oksPointId, Reason reason, String details) {
-        this.oksPointId = Objects.requireNonNull(oksPointId, "oksPointId");
+    public UnconnectedOks(String oksPointFeatureId, Reason reason, String details) {
+        this.oksPointFeatureId = Objects.requireNonNull(oksPointFeatureId, "oksPointFeatureId");
         this.reason = Objects.requireNonNull(reason, "reason");
         this.details = details;
     }
 
-    public Long getOksPointId() {
-        return oksPointId;
+    public String getOksPointFeatureId() {
+        return oksPointFeatureId;
     }
 
     public Reason getReason() {

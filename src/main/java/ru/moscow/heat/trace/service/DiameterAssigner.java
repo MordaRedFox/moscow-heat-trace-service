@@ -2,62 +2,106 @@ package ru.moscow.heat.trace.service;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import ru.moscow.heat.spatial.DiameterSpec;
 import ru.moscow.heat.spatial.DiameterTable;
 import ru.moscow.heat.trace.model.RouteSegment;
+import ru.moscow.heat.trace.model.TechnicalNode;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Назначает расход и условный диаметр сегментам одного маршрута ОКС
- * (план, шаг 8).
+ * Назначает условный диаметр сегментам одного маршрута ОКС (план, шаг 8).
  * <p>
- * Правила:
+ * Правила (ТЗ, п.2.4):
  * <ul>
  *     <li>flow на всём маршруте одного ОКС = flow_tph этой точки
- *     (в итерации 5 объединение ОКС не делается — план, п.2.4 MVP);</li>
- *     <li>идём от ОКС к tie-in, для каждого сегмента —
- *     {@code DiameterTable.minDiameterForFlowAndLength(flow, accumulatedLength)},
- *     где accumulatedLength — сумма длин от начала текущего ДУ;</li>
- *     <li>если длина превышает maxLengthM текущего ДУ — увеличить ДУ,
- *     начать новый отсчёт длины, поставить TechnicalNode
- *     (DIAMETER_CHANGE) в точке смены;</li>
- *     <li>инвариант: ДУ не должен убывать по направлению от ОКС к tie-in.</li>
+ *     (в итерации 5 объединение ОКС не делается — план, MVP);</li>
+ *     <li>идём от ОКС к tie-in, накапливаем длину, пока ДУ по
+ *     {@link DiameterTable#minDiameterForFlowAndLength(double, double)}
+ *     не требует увеличения — тогда начинаем новый отсчёт длины и
+ *     ставим {@link TechnicalNode} (DIAMETER_CHANGE) в начале сегмента,
+ *     на котором сработало увеличение;</li>
+ *     <li>инвариант: ДУ не убывает по направлению от ОКС к tie-in
+ *     (в этом алгоритме это выполняется автоматически, так как ДУ
+ *     только растёт по мере накопления длины).</li>
  * </ul>
- * <p>
  */
 @Service
 @RequiredArgsConstructor
 public class DiameterAssigner {
 
+    /** Результат: сегменты с назначенным ДУ + технические узлы смены ДУ. */
+    public static final class AssignmentResult {
+        private final List<RouteSegment> segments;
+        private final List<TechnicalNode> technicalNodes;
+
+        public AssignmentResult(List<RouteSegment> segments, List<TechnicalNode> technicalNodes) {
+            this.segments = segments;
+            this.technicalNodes = technicalNodes;
+        }
+
+        public List<RouteSegment> getSegments() {
+            return segments;
+        }
+
+        public List<TechnicalNode> getTechnicalNodes() {
+            return technicalNodes;
+        }
+    }
+
     private final DiameterTable diameterTable;
 
     /**
      * Проходит сегменты от ОКС к tie-in (порядок важен!) и заполняет
-     * {@code diameterMm} для каждого, при необходимости вставляя точки
-     * смены ДУ.
+     * {@code diameterMm} для каждого, вставляя технические узлы там,
+     * где ДУ увеличивается.
      *
      * @param orderedSegmentsFromOksToTieIn сегменты одного маршрута,
-     *                                       упорядоченные от ОКС к tie-in,
-     *                                       ещё без назначенного diameterMm
+     *                                       упорядоченные от ОКС к tie-in
      * @param flowTph                       расход ОКС, т/ч
-     * @return сегменты с назначенным ДУ (возможно, с большим числом сегментов,
-     * чем на входе — из-за вставленных точек смены ДУ)
+     * @return сегменты с назначенным ДУ + список технических узлов
      */
-    public List<RouteSegment> assign(List<RouteSegment> orderedSegmentsFromOksToTieIn, BigDecimal flowTph) {
-        // TODO:
-        // double accumulatedLength = 0;
-        // int currentDiameter = diameterTable.minDiameterForFlowAndLength(flowTph, 0);
-        // for each segment (в порядке от ОКС к tie-in):
-        //     accumulatedLength += segment.getLengthM();
-        //     int required = diameterTable.minDiameterForFlowAndLength(flowTph, accumulatedLength);
-        //     if (required > currentDiameter) {
-        //         // вставить TechnicalNode(DIAMETER_CHANGE) в начале сегмента,
-        //         // сбросить accumulatedLength = segment.getLengthM(),
-        //         // currentDiameter = required;
-        //     }
-        //     // присвоить currentDiameter сегменту (пересобрать RouteSegment,
-        //     // т.к. поля immutable)
-        throw new UnsupportedOperationException("TODO: итерация 5, шаг 8");
+    public AssignmentResult assign(List<RouteSegment> orderedSegmentsFromOksToTieIn, BigDecimal flowTph) {
+        double flow = flowTph.doubleValue();
+        List<RouteSegment> result = new ArrayList<>();
+        List<TechnicalNode> technicalNodes = new ArrayList<>();
+
+        double accumulatedLength = 0.0;
+        DiameterSpec currentSpec = diameterTable.minDiameterForFlowAndLength(flow, 0.0);
+
+        for (RouteSegment segment : orderedSegmentsFromOksToTieIn) {
+            accumulatedLength += segment.getLengthM();
+            DiameterSpec required = diameterTable.minDiameterForFlowAndLength(flow, accumulatedLength);
+
+            if (required.getDiameterMm() > currentSpec.getDiameterMm()) {
+                technicalNodes.add(new TechnicalNode(
+                        UUID.randomUUID(),
+                        segment.getFromNode().getCoordinateUtm(),
+                        TechnicalNode.Reason.DIAMETER_CHANGE));
+                accumulatedLength = segment.getLengthM();
+                currentSpec = required;
+            }
+
+            result.add(withDiameter(segment, currentSpec.getDiameterMm()));
+        }
+
+        return new AssignmentResult(result, technicalNodes);
+    }
+
+    private RouteSegment withDiameter(RouteSegment segment, int diameterMm) {
+        return new RouteSegment(
+                segment.getId(),
+                segment.getFromNode(),
+                segment.getToNode(),
+                segment.getGeometryUtm(),
+                segment.getFlowTph(),
+                diameterMm,
+                segment.getLayingMethod(),
+                segment.getKspets(),
+                segment.getLengthM(),
+                segment.getCost());
     }
 }

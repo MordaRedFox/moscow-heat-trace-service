@@ -8,8 +8,10 @@ import java.util.UUID;
 /**
  * Узел маршрута новой тепловой сети.
  * <p>
- * Соответствует плану итерации 5 (trace/model.RouteNode): id, тип узла,
- * координата в проекции UTM (EPSG:32637).
+ * Координата — UTM zone 37N (EPSG:32637), метры, как и {@code RouteSegment.geometryUtm}
+ * и весь граф видимости ({@code AbstractGeoObject.geometryUtm} уже хранит
+ * метрическую геометрию, поэтому внутренний конвейер трассировки работает
+ * в UTM целиком; конвертация в WGS84 для GeoJSON-выгрузки — задача итерации 6-7).
  * <p>
  * Иммутабельный DTO — по аналогии с {@code TieInCandidate} из итерации 4.
  */
@@ -20,18 +22,18 @@ public final class RouteNode {
     private final Coordinate coordinateUtm;
 
     /**
-     * Ссылка на исходный доменный объект, если узел ему соответствует
-     * (id ОКС, id существующей камеры и т.п.). Может быть {@code null}
-     * для чисто геометрических узлов (CORNER, TECHNICAL_NODE, NEW_CHAMBER
-     * до сохранения в БД).
+     * feature_id исходного доменного объекта, если узел ему соответствует
+     * (например, connection_point_id ОКС или feature_id существующей
+     * камеры). {@code null} для чисто геометрических узлов (CORNER,
+     * TECHNICAL_NODE, NEW_CHAMBER до сохранения в БД).
      */
-    private final Long sourceEntityId;
+    private final String sourceFeatureId;
 
-    public RouteNode(UUID id, RouteNodeType type, Coordinate coordinateUtm, Long sourceEntityId) {
+    public RouteNode(UUID id, RouteNodeType type, Coordinate coordinateUtm, String sourceFeatureId) {
         this.id = Objects.requireNonNull(id, "id");
         this.type = Objects.requireNonNull(type, "type");
         this.coordinateUtm = Objects.requireNonNull(coordinateUtm, "coordinateUtm");
-        this.sourceEntityId = sourceEntityId;
+        this.sourceFeatureId = sourceFeatureId;
     }
 
     public UUID getId() {
@@ -46,8 +48,8 @@ public final class RouteNode {
         return coordinateUtm;
     }
 
-    public Long getSourceEntityId() {
-        return sourceEntityId;
+    public String getSourceFeatureId() {
+        return sourceFeatureId;
     }
 
     @Override

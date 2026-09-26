@@ -16,6 +16,7 @@ import ru.moscow.heat.trace.dto.TieInCandidate;
 import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
 import ru.moscow.heat.trace.dto.TraceStatusResponse;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
+import ru.moscow.heat.trace.service.TraceAsyncProcessor;
 import ru.moscow.heat.trace.service.TraceService;
 
 import java.util.List;
@@ -25,7 +26,19 @@ import java.util.UUID;
 /**
  * REST-контроллер моделирования трасс подключения к тепловым сетям.
  * Предоставляет эндпоинты запуска трассировки, опроса статуса и получения
- * кандидатов на присоединение (tie-in candidates)
+ * кандидатов на присоединение (tie-in candidates).
+ * <p>
+ * Обновлено для итерации 5: {@code startTrace} теперь не только регистрирует
+ * сессию, но и реально запускает фоновый расчёт через
+ * {@code TraceAsyncProcessor}; {@code getStatus} возвращает актуальный
+ * статус (200 OK с телом, содержащим {@code TraceStatus} — PENDING,
+ * PROCESSING, COMPLETED со счётчиками, либо FAILED с сообщением об ошибке),
+ * а не жёсткий 501 из заглушки итерации 3.
+ * <p>
+ * ВНИМАНИЕ: {@code startTrace} предполагает, что у {@code TraceAcceptedResponse}
+ * есть геттер {@code getTraceId()} (сам класс мне не присылали — только
+ * использование его 2-аргументного конструктора в {@code TraceService}).
+ * Если геттер называется иначе — поправьте один вызов ниже.
  */
 @Slf4j
 @RestController
@@ -36,20 +49,25 @@ import java.util.UUID;
 public class TraceController {
 
     private final TraceService traceService;
+    private final TraceAsyncProcessor traceAsyncProcessor;
 
-    public TraceController(TraceService traceService) {
+    public TraceController(TraceService traceService, TraceAsyncProcessor traceAsyncProcessor) {
         this.traceService = traceService;
+        this.traceAsyncProcessor = traceAsyncProcessor;
     }
 
     /**
-     * Запуск моделирования трассы для указанной сессии загрузки
+     * Запуск моделирования трассы для указанной сессии загрузки.
+     * Регистрирует сессию (статус {@code PENDING}) и сразу передаёт её
+     * в фоновую обработку — сам HTTP-запрос не ждёт завершения расчёта.
      * @param uploadId идентификатор сессии загрузки
      * @return 202 Accepted с traceId и ссылкой на статус
      */
     @PostMapping("/{uploadId}")
     @Operation(summary = "Запустить моделирование трасс",
                description = "Принимает задачу трассировки в обработку, "
-                       + "регистрирует задачу и возвращает traceId")
+                       + "регистрирует задачу, запускает фоновый расчёт "
+                       + "и возвращает traceId")
     @ApiResponses({
             @ApiResponse(responseCode = "202",
                     description = "Задача принята в обработку",
@@ -62,25 +80,25 @@ public class TraceController {
             @PathVariable UUID uploadId) {
         TraceAcceptedResponse response =
                 traceService.createTraceSession(uploadId);
+        traceAsyncProcessor.process(response.getTraceId(), uploadId);
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(response);
     }
 
     /**
      * Опрос статуса выполнения задачи трассировки.
-     * По спецификации Итерации 3 возвращает HTTP 501 Not Implemented
-     * с телом TraceStatusResponse
      * @param traceId идентификатор задачи трассировки
-     * @return 501 Not Implemented с телом статуса задачи
+     * @return 200 OK с текущим статусом ({@code TraceStatus} в теле —
+     * PENDING/PROCESSING/COMPLETED со счётчиками/FAILED с сообщением)
      */
     @GetMapping("/{traceId}")
     @Operation(summary = "Получить статус моделирования трасс",
-               description = "Возвращает текущий статус задачи. "
-                       + "В Итерации 3 возвращает HTTP 501 "
-                       + "Not Implemented")
+               description = "Возвращает текущий статус задачи: "
+                       + "PENDING, PROCESSING, COMPLETED (со счётчиками "
+                       + "подключённых/неподключённых ОКС) или FAILED "
+                       + "(с сообщением об ошибке)")
     @ApiResponses({
-            @ApiResponse(responseCode = "501",
-                    description = "Алгоритм трассировки не реализован "
-                            + "(заглушка Итерации 3)",
+            @ApiResponse(responseCode = "200",
+                    description = "Текущий статус задачи",
                     content = @Content(schema = @Schema(
                             implementation = TraceStatusResponse.class))),
             @ApiResponse(responseCode = "404",
@@ -88,10 +106,8 @@ public class TraceController {
     })
     public ResponseEntity<TraceStatusResponse> getStatus(
             @PathVariable UUID traceId) {
-        TraceStatusResponse status =
-                traceService.getTraceStatus(traceId);
-        return ResponseEntity.status(HttpStatus.NOT_IMPLEMENTED)
-                .body(status);
+        TraceStatusResponse status = traceService.getTraceStatus(traceId);
+        return ResponseEntity.ok(status);
     }
 
     /**
