@@ -27,12 +27,17 @@ import java.util.concurrent.atomic.AtomicInteger;
 /**
  * Потоковый парсер GeoJSON с валидацией структуры, обязательных атрибутов и
  * типов геометрии. Файл не загружается в память целиком; валидные объекты
- * сохраняются батчами.
- *
+ * сохраняются батчами
  * <p>Для каждой валидной фичи дополнительно строится JTS-геометрия
- * (колонка geom, SRID 4326) и её проекция в UTM 37N (колонка geom_utm,
- * SRID 32637) — см. {@link GeometryConverterService} и
- * {@link CoordinateTransformService}.
+ * (колонка {@code geom}, SRID 4326) и её проекция в UTM 37N (колонка
+ * {@code geom_utm}, SRID 32637) — см. {@link GeometryConverterService} и
+ * {@link CoordinateTransformService}
+ * <p>Согласно ТП раздел 1.1: «Идентификаторы входных объектов могут быть
+ * строковыми или числовыми». Валидатор {@link #validateAttributeTypes}
+ * принимает оба варианта для поля {@code id}. Числовые id приводятся к
+ * строке через {@link JsonNode#asText()} и сохраняются в
+ * {@code GeoFeature.featureId}, чтобы единообразно использоваться как
+ * ключ во всех репозиториях и ссылках
  */
 @Slf4j
 @Service
@@ -54,6 +59,10 @@ public class GeoJsonParserService {
      * Разбирает поток GeoJSON и сохраняет валидные объекты
      * батчами по {@link #batchSize}. Дубликаты {@code id} в рамках одной
      * загрузки отсеиваются до записи в БД и попадают в список ошибок
+     * @param inputStream входной поток файла
+     * @param uploadId    идентификатор сессии загрузки
+     * @return накопитель с результатами парсинга
+     * @throws IOException при ошибке чтения потока
      */
     public GeoJsonUploadResponse processStream(
             InputStream inputStream, UUID uploadId) throws IOException {
@@ -132,6 +141,8 @@ public class GeoJsonParserService {
      * Сбрасывает накопленный батч в БД. Основной путь - пакетная вставка;
      * при нарушении целостности на уровне БД переходит к поштучной вставке,
      * чтобы локализовать проблемную фичу
+     * @param batch    накопленный батч фич
+     * @param response накопитель результатов (обновляет счётчики и bbox)
      */
     private void flushBatch(List<GeoFeature> batch,
                             GeoJsonUploadResponse response) {
@@ -168,8 +179,14 @@ public class GeoJsonParserService {
 
     /**
      * Валидирует один feature и превращает его в {@link GeoFeature},
-     * включая построение PostGIS-геометрий geom (4326) и geom_utm (32637).
-     * При любой ошибке возвращает {@code null} и фиксирует сообщение
+     * включая построение PostGIS-геометрий {@code geom} (4326) и
+     * {@code geom_utm} (32637). При любой ошибке возвращает {@code null}
+     * и фиксирует сообщение
+     * @param feature    JSON-узел фичи
+     * @param uploadId   идентификатор сессии
+     * @param response   накопитель ошибок и счётчиков
+     * @param logCounter счётчик для ограничения логирования
+     * @return готовая сущность или {@code null}
      */
     private GeoFeature validateAndMap(JsonNode feature, UUID uploadId,
                                       GeoJsonUploadResponse response,
@@ -188,6 +205,7 @@ public class GeoJsonParserService {
             addError(response, logCounter, null, "отсутствует id");
             return null;
         }
+        // id может быть числом или строкой — asText() работает для обоих
         String featureId = properties.get("id").asText();
         if (featureId.isEmpty()) {
             addError(response, logCounter, null, "отсутствует id");
@@ -263,6 +281,10 @@ public class GeoJsonParserService {
     /**
      * Добавляет ошибку в накопитель и логирует первые
      * {@link #errorLogLimit} сообщений
+     * @param response  накопитель
+     * @param counter   счётчик логов
+     * @param featureId идентификатор проблемной фичи
+     * @param message   текст ошибки
      */
     private void addError(GeoJsonUploadResponse response,
                           AtomicInteger counter,
@@ -276,6 +298,8 @@ public class GeoJsonParserService {
     /**
      * Проверяет CRS файла: допускаются только WGS 84 / CRS84 / EPSG:4326.
      * Иначе бросает исключение
+     * @param parser парсер на позиции значения поля {@code crs}
+     * @throws IOException при ошибке чтения
      */
     private void validateCrs(JsonParser parser) throws IOException {
         JsonNode crsNode = objectMapper.readTree(parser);
@@ -299,6 +323,8 @@ public class GeoJsonParserService {
 
     /**
      * Обновляет bbox по геометрии объекта
+     * @param geometry GeoJSON-узел геометрии
+     * @param response накопитель (обновляет bbox)
      */
     private void updateBbox(JsonNode geometry, GeoJsonUploadResponse response) {
         JsonNode coordinates = geometry.get("coordinates");
@@ -311,6 +337,8 @@ public class GeoJsonParserService {
     /**
      * Рекурсивно обходит координаты GeoJSON, определяя
      * пары [x, y] и передавая их в bbox
+     * @param node     текущий узел
+     * @param response накопитель
      */
     private void walkCoordinates(JsonNode node, GeoJsonUploadResponse response) {
         if (node == null || node.isNull() || !node.isArray()) {
@@ -327,6 +355,9 @@ public class GeoJsonParserService {
 
     /**
      * Возвращает список отсутствующих обязательных атрибутов для типа
+     * @param type       тип объекта
+     * @param properties properties фичи
+     * @return список отсутствующих ключей
      */
     private List<String> missingProperties(ObjectType type, JsonNode properties) {
         List<String> missing = new ArrayList<>();
@@ -340,7 +371,8 @@ public class GeoJsonParserService {
 
     /**
      * Проверяет структуру блока coordinates в зависимости от типа геометрии
-     *
+     * @param geometryType тип геометрии
+     * @param coordinates  узел coordinates
      * @return текст ошибки или {@code null}, если структура корректна
      */
     private String validateCoordinates(String geometryType, JsonNode coordinates) {
@@ -364,7 +396,12 @@ public class GeoJsonParserService {
         }
     }
 
-    /** Проверяет Point: массив из ≥2 чисел в допустимых диапазонах */
+    /**
+     * Проверяет Point: массив из ≥2 чисел в допустимых диапазонах
+     * @param point узел точки
+     * @param path  путь для сообщения об ошибке
+     * @return текст ошибки или {@code null}
+     */
     private String validatePoint(JsonNode point, String path) {
         if (!point.isArray() || point.size() < 2) {
             return path + ": Point должен содержать минимум 2 координаты";
@@ -383,7 +420,12 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /** Проверяет LineString: минимум 2 корректные точки */
+    /**
+     * Проверяет LineString: минимум 2 корректные точки
+     * @param line узел линии
+     * @param path путь для сообщения об ошибке
+     * @return текст ошибки или {@code null}
+     */
     private String validateLineString(JsonNode line, String path) {
         if (!line.isArray() || line.size() < 2) {
             return path + ": LineString должен содержать минимум 2 точки";
@@ -397,7 +439,12 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /** Проверяет Polygon: минимум одно корректное кольцо */
+    /**
+     * Проверяет Polygon: минимум одно корректное кольцо
+     * @param polygon узел полигона
+     * @param path    путь для сообщения об ошибке
+     * @return текст ошибки или {@code null}
+     */
     private String validatePolygon(JsonNode polygon, String path) {
         if (!polygon.isArray() || polygon.size() < 1) {
             return path + ": Polygon должен содержать минимум 1 кольцо";
@@ -411,7 +458,12 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /** Проверяет MultiPolygon: минимум один корректный полигон */
+    /**
+     * Проверяет MultiPolygon: минимум один корректный полигон
+     * @param multi узел мультиполигона
+     * @param path  путь для сообщения об ошибке
+     * @return текст ошибки или {@code null}
+     */
     private String validateMultiPolygon(JsonNode multi, String path) {
         if (!multi.isArray() || multi.size() < 1) {
             return path + ": MultiPolygon должен содержать минимум 1 полигон";
@@ -425,7 +477,12 @@ public class GeoJsonParserService {
         return null;
     }
 
-    /** Проверяет кольцо: ≥4 корректных точек, первая и последняя совпадают */
+    /**
+     * Проверяет кольцо: ≥4 корректных точек, первая и последняя совпадают
+     * @param ring узел кольца
+     * @param path путь для сообщения об ошибке
+     * @return текст ошибки или {@code null}
+     */
     private String validateLinearRing(JsonNode ring, String path) {
         if (!ring.isArray() || ring.size() < 4) {
             return path + ": кольцо должно содержать минимум 4 точки";
@@ -445,19 +502,24 @@ public class GeoJsonParserService {
         }
         return null;
     }
-        /**
+
+    /**
      * Проверяет типы известных атрибутов, если они присутствуют
      * в properties. Состав полей соответствует актуальному
      * Техническому приложению ЛЦТ 2026:
      * <ul>
+     *   <li>{@code id} — строка <b>или число</b> (ТП раздел 1.1);</li>
+     *   <li>{@code object_type} — строка;</li>
      *   <li>{@code diameter} — целое (heat_network);</li>
      *   <li>{@code flow_tph} — число (oks_connection_point);</li>
      *   <li>{@code restriction_type} — строка (restriction).</li>
      * </ul>
+     * @param properties properties фичи
+     * @return список ошибок типов (пустой, если всё ок)
      */
     private List<String> validateAttributeTypes(JsonNode properties) {
         List<String> errors = new ArrayList<>();
-        checkString(properties, "id", errors);
+        checkStringOrNumber(properties, "id", errors);
         checkString(properties, "object_type", errors);
         checkInteger(properties, "diameter", errors);
         checkNumber(properties, "flow_tph", errors);
@@ -465,6 +527,29 @@ public class GeoJsonParserService {
         return errors;
     }
 
+    /**
+     * Проверяет, что поле (если присутствует и не null) - строка или число.
+     * Используется для {@code id}: ТП разрешает оба варианта
+     * @param node   properties фичи
+     * @param field  имя поля
+     * @param errors накопитель ошибок
+     */
+    private void checkStringOrNumber(JsonNode node, String field,
+                                      List<String> errors) {
+        JsonNode v = node.get(field);
+        if (v != null && !v.isNull()
+                && !v.isTextual() && !v.isNumber()) {
+            errors.add(field + " должен быть строкой или числом");
+        }
+    }
+
+    /**
+     * Проверяет, что целочисленное поле (если присутствует) -
+     * действительно целое число
+     * @param node   properties фичи
+     * @param field  имя поля
+     * @param errors накопитель ошибок
+     */
     private void checkInteger(JsonNode node, String field, List<String> errors) {
         JsonNode v = node.get(field);
         if (v != null && !v.isNull() && !v.isIntegralNumber()) {
@@ -472,6 +557,13 @@ public class GeoJsonParserService {
         }
     }
 
+    /**
+     * Проверяет, что числовое поле (если присутствует) —
+     * действительно число
+     * @param node   properties фичи
+     * @param field  имя поля
+     * @param errors накопитель ошибок
+     */
     private void checkNumber(JsonNode node, String field, List<String> errors) {
         JsonNode v = node.get(field);
         if (v != null && !v.isNull() && !v.isNumber()) {
@@ -479,6 +571,13 @@ public class GeoJsonParserService {
         }
     }
 
+    /**
+     * Проверяет, что строковое поле (если присутствует) -
+     * действительно строка
+     * @param node   properties фичи
+     * @param field  имя поля
+     * @param errors накопитель ошибок
+     */
     private void checkString(JsonNode node, String field, List<String> errors) {
         JsonNode v = node.get(field);
         if (v != null && !v.isNull() && !v.isTextual()) {
