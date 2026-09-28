@@ -92,22 +92,31 @@ moscow-heat-trace-service/
 │   │   │   │   ├── model/                     # DTO маршрута
 │   │   │   │   │   ├── LayingMethod.java                   # BASE / SPECIAL
 │   │   │   │   │   ├── NewChamber.java                     # Новая тепловая камера: точка UTM, диаметр, стоимость (заготовка под итерацию 7)
+│   │   │   │   │   ├── OksGroup.java                       # Группа ОКС, подключаемых совместно через общий tie-in (камерная / радиусная / одиночная)
 │   │   │   │   │   ├── RouteNode.java                      # Узел маршрута: id, тип, координата UTM, source_feature_id
 │   │   │   │   │   ├── RouteNodeType.java                  # OKS_POINT / EXISTING_CHAMBER / NEW_CHAMBER / TECHNICAL_NODE / CORNER
 │   │   │   │   │   ├── RouteSegment.java                   # Отрезок маршрута: узлы, геометрия UTM, flow, ДУ, способ прокладки, Kспец, длина, cost (null)
+│   │   │   │   │   ├── RouteTree.java                      # Дерево маршрутов группы ОКС: корень (tie-in), рёбра, листья, узлы ветвления
 │   │   │   │   │   ├── TechnicalNode.java                  # Служебная точка смены ДУ / способа прокладки / границы спецзоны
 │   │   │   │   │   ├── TraceResult.java                    # Итог трассировки: сегменты, камеры, техузлы, неподключённые, счётчики
+│   │   │   │   │   ├── TreeEdge.java                       # Ребро дерева: from/to узлы, геометрия, длина, flow, ДУ, servedOksIds (мутабельно в фазе расчёта)
+│   │   │   │   │   ├── TreeNode.java                       # Узел дерева: ROOT / LEAF / BRANCH / INTERMEDIATE, координата, рёбра к родителю и детям
 │   │   │   │   │   └── UnconnectedOks.java                 # Неподключённый ОКС: feature_id, Reason, детали
 │   │   │   │   └── service/
 │   │   │   │       ├── AngleChecker.java                   # Проверка угла пересечения road/tram_tracks ≥ 45°; коллинеарные — недопустимо
-│   │   │   │       ├── DiameterAssigner.java               # Назначение ДУ сегментам по flow и накопленной длине; техузлы смены ДУ; ДУ не убывает к tie-in
+│   │   │   │       ├── DiameterAssigner.java               # Назначение ДУ сегментам линейного маршрута; техузлы смены ДУ; ДУ не убывает к tie-in
+│   │   │   │       ├── FlowAggregator.java                 # Агрегация flow и servedOksIds по рёбрам дерева (снизу вверх от листьев к корню)
 │   │   │   │       ├── LengthValidator.java                # Проверка предельной длины непрерывной части одного ДУ; защитная проверка перед сборкой TraceResult
-│   │   │   │       ├── RouteSegmentSplitter.java           # Разбиение пути по границам спецзон; сохранение топологии RouteNode между соседними сегментами
+│   │   │   │       ├── OksGrouper.java                     # Группировка ОКС: по общей камере, по радиусу tie-in (30 м), одиночки
+│   │   │   │       ├── RouteSegmentSplitter.java           # Разбиение линейного пути по границам спецзон; топология RouteNode между соседними сегментами
 │   │   │   │       ├── RouteSimplifier.java                # String-pulling с envelope prefilter + PreparedGeometry + STRtree; ignore-set для первого сегмента
 │   │   │   │       ├── TieInCandidateService.java          # Алгоритм: ближайший heat_network → tie-in → камеры ≤10 м и ≤4 примыканий → EXISTING или NEW
 │   │   │   │       ├── TraceAsyncProcessor.java            # @Async-обработка трассировки: markProcessing → run → markCompleted / markFailed
-│   │   │   │       ├── TraceOrchestrator.java              # Главный конвейер на ОКС: кандидат → ignore-set → A* → simplify → angles → split → diameter → validate
-│   │   │   │       └── TraceService.java                   # In-memory сессии: traceId → uploadId → TraceResult; статусы, кандидаты, счётчики
+│   │   │   │       ├── TraceOrchestrator.java              # Главный конвейер: группировка → групповой пайплайн с fallback на поштучную обработку
+│   │   │   │       ├── TraceService.java                   # In-memory сессии: traceId → uploadId → TraceResult; статусы, кандидаты, счётчики
+│   │   │   │       ├── TreeDiameterAssigner.java           # Назначение ДУ рёбрам дерева: по flow → монотонность от листа к корню → предельная длина
+│   │   │   │       ├── TreeRouter.java                     # Построение дерева маршрутов группы: A* на ОКС + RouteSimplifier, слияние путей по координате
+│   │   │   │       └── TreeRouteSegmentSplitter.java       # Разбиение рёбер дерева на сегменты; камеры для ветвлений и корня; топология RouteNode по nodeCache
 │   │   │   │
 │   │   │   └── HeatTraceServiceApplication.java            # Точка входа Spring Boot
 │   │   │
@@ -155,13 +164,18 @@ moscow-heat-trace-service/
 │       │   │   └── service/
 │       │   │       ├── AngleCheckerTest.java               # 90°, ровно 45°, 30°, коллинеарные, нет пересечения, дефолт
 │       │   │       ├── DiameterAssignerTest.java           # Постоянный ДУ, рост на превышении длины, ДУ не убывает
+│       │   │       ├── FlowAggregatorTest.java             # Общий ствол, одиночный ОКС, вложенное ветвление
 │       │   │       ├── LengthValidatorTest.java            # В пределах/превышение, сброс счётчика при смене ДУ, неизвестный ДУ
+│       │   │       ├── OksGrouperTest.java                 # Камерная и радиусная группировка, одиночки, исключение без кандидата
 │       │   │       ├── RouteSegmentSplitterTest.java       # Разбиение BASE/SPECIAL, end_node_id == start_node_id, тип конечного узла, METHOD_CHANGE
 │       │   │       ├── RouteSimplifierTest.java            # Склейка коллинеарных, обход препятствия, ignore-set
 │       │   │       ├── TieInCandidateIntegrationTest.java  # PostGIS: countConnections (0/1/2/4 + транзит), EXISTING/NEW, target-координаты, изоляция
 │       │   │       ├── TieInCandidateServiceTest.java      # Mockito: границы 10 м, 1–4 примыканий, target vs tie-in, стоимость камеры, сортировка
-│       │   │       ├── TraceOrchestratorIntegrationTest.java # E2E на PostGIS: один ОКС внутри своего полигона → COMPLETED, NEW_CHAMBER, счётчики
-│       │   │       └── TraceServiceTest.java               # Mockito: сессия, статусы PENDING/PROCESSING/COMPLETED/FAILED, кандидаты, 404
+│       │   │       ├── TraceOrchestratorIntegrationTest.java # E2E на PostGIS: один ОКС внутри полигона; 3 ОКС к одной камере — групповой пайплайн
+│       │   │       ├── TraceServiceTest.java               # Mockito: сессия, статусы PENDING/PROCESSING/COMPLETED/FAILED, кандидаты, 404
+│       │   │       ├── TreeDiameterAssignerTest.java       # Монотонность, каскад, предельная длина, общий ствол
+│       │   │       ├── TreeRouterTest.java                 # Слияние ствола, ветвление в точке расхождения, корень как ветвление
+│       │   │       └── TreeRouteSegmentSplitterTest.java   # Топология, EXISTING_CHAMBER-корень, камеры ветвлений, наследование ДУ и flow
 │       │   │
 │       │   └── AbstractIntegrationTest.java                # @SpringBootTest + singleton PostGIS-контейнер через Testcontainers
 │       │
