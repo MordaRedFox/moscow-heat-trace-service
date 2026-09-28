@@ -145,6 +145,7 @@ public class TraceGeoJsonExporter {
 
         // Свойства
         gen.writeObjectFieldStart("properties");
+        writeParsedId(gen, "id", segment.getStringId());
         gen.writeStringField("object_type", "heat_network");
         gen.writeStringField("variant_id", variantId);
         writeNodeRef(gen, "start_node_id", segment.getFromNode());
@@ -176,6 +177,7 @@ public class TraceGeoJsonExporter {
         writePointGeometry(gen, wgs84Point);
 
         gen.writeObjectFieldStart("properties");
+        writeParsedId(gen, "id", chamber.getId());
         gen.writeStringField("object_type", "heat_chamber");
         gen.writeStringField("variant_id", variantId);
         gen.writeNumberField("diameter", chamber.getDiameterMm());
@@ -216,6 +218,7 @@ public class TraceGeoJsonExporter {
         writePointGeometry(gen, wgs84Point);
 
         gen.writeObjectFieldStart("properties");
+        writeParsedId(gen, "id", effectiveId);
         gen.writeStringField("variant_id", variantId);
         if ("existing_chamber".equals(node.getNodeType())) {
             gen.writeStringField("object_type", "heat_chamber");
@@ -235,6 +238,7 @@ public class TraceGeoJsonExporter {
         gen.writeNullField("geometry");
 
         gen.writeObjectFieldStart("properties");
+        gen.writeStringField("id", summary.getVariantId() + "-summary");
         gen.writeStringField("object_type", "variant_summary");
         gen.writeStringField("variant_id", summary.getVariantId());
         if (summary.getRank() != null) {

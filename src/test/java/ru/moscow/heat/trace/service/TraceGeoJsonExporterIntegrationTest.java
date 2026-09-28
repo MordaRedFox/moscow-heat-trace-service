@@ -172,8 +172,9 @@ class TraceGeoJsonExporterIntegrationTest {
         assertThat(unconnectedArray.get(1).isTextual()).isTrue();
         assertThat(unconnectedArray.get(1).asText()).isEqualTo("oks-alpha");
 
-        // Проверяем, что variant_id присутствует у всех объектов
+        // Проверяем, что id и variant_id присутствуют у всех объектов в properties
         for (JsonNode f : features) {
+            assertThat(f.get("properties").has("id")).isTrue();
             assertThat(f.get("properties").has("variant_id")).isTrue();
             assertThat(f.get("properties").get("variant_id").asText()).isEqualTo("v1");
         }
