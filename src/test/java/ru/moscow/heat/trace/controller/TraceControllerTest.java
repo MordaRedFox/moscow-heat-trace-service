@@ -7,16 +7,17 @@ import org.locationtech.jts.geom.GeometryFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.http.HttpHeaders;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
-import ru.moscow.heat.trace.dto.TieInCandidate;
-import ru.moscow.heat.trace.dto.TieInType;
-import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
-import ru.moscow.heat.trace.dto.TraceStatus;
-import ru.moscow.heat.trace.dto.TraceStatusResponse;
+import ru.moscow.heat.trace.dto.*;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
+import ru.moscow.heat.trace.exception.VariantNotFoundException;
 import ru.moscow.heat.trace.service.TraceService;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -24,20 +25,10 @@ import java.util.UUID;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /**
  * WebMvc-тесты REST-контроллера {@link TraceController}
- * <p>Используется срез {@link WebMvcTest}: поднимается только
- * веб-слой, {@link TraceService} подменяется моком. Проверяются
- * HTTP-коды и структура JSON-ответов на успешные и ошибочные
- * сценарии эндпоинтов:
- * <ul>
- *   <li>{@code POST /api/trace/{uploadId}} - постановка задачи в очередь;</li>
- *   <li>{@code GET /api/trace/{traceId}} - опрос статуса задачи;</li>
- *   <li>{@code GET /api/trace/{traceId}/candidates} - получение кандидатов на присоединение.</li>
- * </ul>
  */
 @WebMvcTest(TraceController.class)
 @DisplayName("WebMvc-тесты REST API трассировки (TraceController)")
@@ -51,12 +42,6 @@ class TraceControllerTest {
 
     private final GeometryFactory gf = new GeometryFactory();
 
-    /**
-     * Успешная постановка задачи: сервис возвращает
-     * идентификатор и URL статуса, контроллер отвечает
-     * HTTP 202 Accepted
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
     @DisplayName("POST при существующей загрузке возвращает 202")
     void shouldReturn202WhenUploadExists() throws Exception {
@@ -76,12 +61,6 @@ class TraceControllerTest {
                         .value(statusUrl));
     }
 
-    /**
-     * Постановка задачи для несуществующей загрузки: сервис
-     * бросает {@link UploadNotFoundException}, контроллер
-     * возвращает HTTP 404 Not Found с текстом ошибки
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
     @DisplayName("POST при неизвестной загрузке возвращает 404")
     void shouldReturn404WhenUploadDoesNotExist() throws Exception {
@@ -97,15 +76,8 @@ class TraceControllerTest {
                 .andExpect(jsonPath("$.error").value(message));
     }
 
-    /**
-     * Опрос статуса известной задачи: в Итерации 3 алгоритм
-     * не реализован, поэтому контроллер возвращает
-     * HTTP 501 Not Implemented с телом {@link TraceStatusResponse}
-     * и статусом {@code NOT_IMPLEMENTED}
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
-    @DisplayName("GET известной задачи возвращает 501")
+    @DisplayName("GET известной задачи возвращает 501 для статуса NOT_IMPLEMENTED")
     void shouldReturn501WhenTraceExists() throws Exception {
         UUID traceId = UUID.randomUUID();
         Instant now = Instant.parse("2026-09-22T00:00:00Z");
@@ -124,12 +96,22 @@ class TraceControllerTest {
                         .value("2026-09-22T00:00:00Z"));
     }
 
-    /**
-     * Опрос статуса неизвестной задачи: сервис бросает
-     * {@link TraceNotFoundException}, контроллер возвращает
-     * HTTP 404 Not Found с текстом ошибки
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
+    @Test
+    @DisplayName("GET известной выполненной задачи возвращает 200 OK")
+    void shouldReturn200WhenTraceCompleted() throws Exception {
+        UUID traceId = UUID.randomUUID();
+        Instant now = Instant.parse("2026-09-28T12:00:00Z");
+
+        when(traceService.getTraceStatus(traceId))
+                .thenReturn(new TraceStatusResponse(
+                        traceId, TraceStatus.COMPLETED, now));
+
+        mvc.perform(get("/api/trace/{traceId}", traceId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.traceId").value(traceId.toString()))
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+    }
+
     @Test
     @DisplayName("GET неизвестной задачи возвращает 404")
     void shouldReturn404WhenTraceDoesNotExist() throws Exception {
@@ -145,11 +127,6 @@ class TraceControllerTest {
                                 + traceId + " не найдена"));
     }
 
-    /**
-     * Запрос кандидатов для существующей задачи: контроллер
-     * возвращает HTTP 200 OK и JSON-список TieInCandidate
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
     @DisplayName("GET /candidates известной задачи возвращает 200 и список кандидатов")
     void shouldReturnCandidatesWhenTraceExists() throws Exception {
@@ -184,11 +161,6 @@ class TraceControllerTest {
                 .andExpect(jsonPath("$[0].cost").value(5_000_000.0));
     }
 
-    /**
-     * Запрос кандидатов для неизвестной задачи: сервис бросает
-     * {@link TraceNotFoundException}, контроллер возвращает HTTP 404 Not Found
-     * @throws Exception при ошибке выполнения HTTP-запроса
-     */
     @Test
     @DisplayName("GET /candidates неизвестной задачи возвращает 404")
     void shouldReturn404WhenGettingCandidatesForUnknownTrace() throws Exception {
@@ -202,5 +174,86 @@ class TraceControllerTest {
                 .andExpect(jsonPath("$.error")
                         .value("Задача трассировки с traceId="
                                 + traceId + " не найдена"));
+    }
+
+    @Test
+    @DisplayName("GET /variants возвращает список сводок вариантов трассировки")
+    void shouldReturnVariantsList() throws Exception {
+        UUID traceId = UUID.randomUUID();
+        VariantSummary summary = new VariantSummary(
+                "v1",
+                1,
+                BigDecimal.valueOf(10_000_000L),
+                BigDecimal.valueOf(3_000_000L),
+                1,
+                BigDecimal.valueOf(5_000_000L),
+                BigDecimal.ZERO,
+                BigDecimal.valueOf(18_000_000L),
+                150.0,
+                0.954,
+                List.of()
+        );
+
+        when(traceService.getVariants(traceId)).thenReturn(List.of(summary));
+
+        mvc.perform(get("/api/trace/{traceId}/variants", traceId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].variantId").value("v1"))
+                .andExpect(jsonPath("$[0].rank").value(1))
+                .andExpect(jsonPath("$[0].constructionCost").value(10000000.0))
+                .andExpect(jsonPath("$[0].chamberConstructionCost").value(3000000.0))
+                .andExpect(jsonPath("$[0].existingChamberTieInCount").value(1))
+                .andExpect(jsonPath("$[0].existingChamberTieInCost").value(5000000.0))
+                .andExpect(jsonPath("$[0].calculatedCost").value(18000000.0))
+                .andExpect(jsonPath("$[0].newNetworkLength").value(150.0))
+                .andExpect(jsonPath("$[0].score").value(0.954));
+    }
+
+    @Test
+    @DisplayName("GET /export?variantId=v1 возвращает StreamingResponseBody конкретного варианта")
+    void shouldExportSingleVariantStreaming() throws Exception {
+        UUID traceId = UUID.randomUUID();
+        String fakeGeoJson = "{\"type\":\"FeatureCollection\",\"features\":[]}";
+        StreamingResponseBody body = outputStream ->
+                outputStream.write(fakeGeoJson.getBytes(StandardCharsets.UTF_8));
+
+        when(traceService.exportTrace(traceId, "v1")).thenReturn(body);
+
+        mvc.perform(get("/api/trace/{traceId}/export", traceId).param("variantId", "v1"))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"trace-" + traceId + "-v1.geojson\""))
+                .andExpect(content().contentType("application/geo+json;charset=UTF-8"));
+    }
+
+    @Test
+    @DisplayName("GET /export без параметров возвращает StreamingResponseBody всех вариантов")
+    void shouldExportAllVariantsStreaming() throws Exception {
+        UUID traceId = UUID.randomUUID();
+        String fakeGeoJson = "{\"type\":\"FeatureCollection\",\"features\":[]}";
+        StreamingResponseBody body = outputStream ->
+                outputStream.write(fakeGeoJson.getBytes(StandardCharsets.UTF_8));
+
+        when(traceService.exportTrace(traceId, null)).thenReturn(body);
+
+        mvc.perform(get("/api/trace/{traceId}/export", traceId))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"trace-" + traceId + ".geojson\""))
+                .andExpect(content().contentType("application/geo+json;charset=UTF-8"));
+    }
+
+    @Test
+    @DisplayName("GET /export несуществующего варианта возвращает 404")
+    void shouldReturn404WhenExportVariantNotFound() throws Exception {
+        UUID traceId = UUID.randomUUID();
+        when(traceService.exportTrace(traceId, "v99"))
+                .thenThrow(new VariantNotFoundException("Вариант v99 не найден"));
+
+        mvc.perform(get("/api/trace/{traceId}/export", traceId).param("variantId", "v99"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Вариант v99 не найден"));
     }
 }
