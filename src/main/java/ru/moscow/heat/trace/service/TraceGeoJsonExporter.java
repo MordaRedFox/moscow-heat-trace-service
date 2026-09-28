@@ -105,7 +105,7 @@ public class TraceGeoJsonExporter {
         if (variant.getSegments() != null) {
             for (RouteSegment segment : variant.getSegments()) {
                 writeNetworkSegmentFeature(segment, variant.getVariantId(), gen);
-                collectAndWriteNodes(segment, writtenNodeIds, gen);
+                collectAndWriteNodes(segment, variant.getVariantId(), writtenNodeIds, gen);
             }
         }
 
@@ -181,13 +181,13 @@ public class TraceGeoJsonExporter {
     }
 
     private void collectAndWriteNodes(
-            RouteSegment segment, Set<String> writtenIds, JsonGenerator gen) throws IOException {
-        writeNodeIfAbsent(segment.getFromNode(), writtenIds, gen);
-        writeNodeIfAbsent(segment.getToNode(), writtenIds, gen);
+            RouteSegment segment, String variantId, Set<String> writtenIds, JsonGenerator gen) throws IOException {
+        writeNodeIfAbsent(segment.getFromNode(), variantId, writtenIds, gen);
+        writeNodeIfAbsent(segment.getToNode(), variantId, writtenIds, gen);
     }
 
     private void writeNodeIfAbsent(
-            RouteNode node, Set<String> writtenIds, JsonGenerator gen) throws IOException {
+            RouteNode node, String variantId, Set<String> writtenIds, JsonGenerator gen) throws IOException {
         if (node == null) {
             return;
         }
@@ -209,6 +209,7 @@ public class TraceGeoJsonExporter {
         writePointGeometry(gen, wgs84Point);
 
         gen.writeObjectFieldStart("properties");
+        gen.writeStringField("variant_id", variantId);
         if ("existing_chamber".equals(node.getNodeType())) {
             gen.writeStringField("object_type", "heat_chamber");
         } else {

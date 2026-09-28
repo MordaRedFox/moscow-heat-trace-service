@@ -151,6 +151,12 @@ class TraceGeoJsonExporterIntegrationTest {
         assertThat(summaryProps.get("rank").asInt()).isEqualTo(1);
         assertThat(summaryProps.get("calculated_cost").asDouble()).isEqualTo(18_550_700.0);
         assertThat(summaryProps.get("new_network_length").asDouble()).isEqualTo(100.0);
+
+        // Проверяем, что variant_id присутствует у всех объектов
+        for (JsonNode f : features) {
+            assertThat(f.get("properties").has("variant_id")).isTrue();
+            assertThat(f.get("properties").get("variant_id").asText()).isEqualTo("v1");
+        }
     }
 
     @Test
