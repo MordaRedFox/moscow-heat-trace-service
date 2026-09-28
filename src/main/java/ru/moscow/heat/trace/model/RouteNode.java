@@ -1,4 +1,4 @@
-﻿package ru.moscow.heat.trace.model;
+package ru.moscow.heat.trace.model;
 
 import lombok.EqualsAndHashCode;
 import lombok.ToString;
@@ -48,7 +48,7 @@ public final class RouteNode {
             return RouteNodeType.TECHNICAL_NODE;
         }
         String upper = nodeType.toUpperCase();
-        if (upper.contains("OKS")) return RouteNodeType.OKS_CONNECTION_POINT;
+        if (upper.contains("OKS")) return RouteNodeType.OKS_POINT;
         if (upper.contains("EXISTING") || upper.contains("CHAMBER")) return RouteNodeType.EXISTING_CHAMBER;
         if (upper.contains("NEW")) return RouteNodeType.NEW_CHAMBER;
         if (upper.contains("CORNER")) return RouteNodeType.CORNER;

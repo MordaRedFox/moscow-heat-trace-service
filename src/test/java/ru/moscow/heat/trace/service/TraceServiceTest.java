@@ -1,4 +1,4 @@
-﻿package ru.moscow.heat.trace.service;
+package ru.moscow.heat.trace.service;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;

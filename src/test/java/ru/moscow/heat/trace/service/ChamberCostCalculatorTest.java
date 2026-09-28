@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
+import ru.moscow.heat.spatial.ChamberCostTable;
 import ru.moscow.heat.trace.model.NewChamber;
 
 import java.math.BigDecimal;

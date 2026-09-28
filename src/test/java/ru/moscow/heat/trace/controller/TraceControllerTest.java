@@ -1,4 +1,4 @@
-﻿package ru.moscow.heat.trace.controller;
+package ru.moscow.heat.trace.controller;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;

@@ -126,7 +126,7 @@ public class TraceGeoJsonExporter {
             RouteSegment segment, String variantId, JsonGenerator gen) throws IOException {
         gen.writeStartObject();
         gen.writeStringField("type", "Feature");
-        writeParsedId(gen, "id", segment.getId());
+        writeParsedId(gen, "id", segment.getStringId());
 
         // Геометрия LineString в WGS84
         LineString wgs84Line = (LineString) coordinateTransformService.toWgs84(segment.getGeometry());
@@ -282,8 +282,8 @@ public class TraceGeoJsonExporter {
         if (node.getSourceFeatureId() != null && !node.getSourceFeatureId().isBlank()) {
             return node.getSourceFeatureId();
         }
-        if (node.getId() != null && !node.getId().isBlank()) {
-            return node.getId();
+        if (node.getId() != null) {
+            return node.getId().toString();
         }
         return java.util.UUID.randomUUID().toString();
     }

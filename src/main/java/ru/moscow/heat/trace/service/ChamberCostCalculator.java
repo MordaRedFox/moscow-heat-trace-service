@@ -3,6 +3,7 @@ package ru.moscow.heat.trace.service;
 import lombok.RequiredArgsConstructor;
 import org.locationtech.jts.geom.Point;
 import org.springframework.stereotype.Service;
+import ru.moscow.heat.spatial.ChamberCostTable;
 import ru.moscow.heat.trace.model.NewChamber;
 
 import java.math.BigDecimal;
@@ -25,7 +26,7 @@ public class ChamberCostCalculator {
      * @return стоимость в рублях
      */
     public BigDecimal calculateCost(int diameterMm) {
-        return chamberCostTable.getCost(diameterMm);
+        return BigDecimal.valueOf(chamberCostTable.costForDiameter(diameterMm)).setScale(2);
     }
 
     /**

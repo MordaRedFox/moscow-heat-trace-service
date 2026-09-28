@@ -1,4 +1,4 @@
-﻿package ru.moscow.heat.trace.model;
+package ru.moscow.heat.trace.model;
 
 import lombok.EqualsAndHashCode;
 import lombok.ToString;

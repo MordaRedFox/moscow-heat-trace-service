@@ -1,4 +1,4 @@
-﻿package ru.moscow.heat.trace.service;
+package ru.moscow.heat.trace.service;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -8,7 +8,6 @@ import ru.moscow.heat.geojson.exception.UploadNotFoundException;
 import ru.moscow.heat.geojson.repository.UploadSessionRepository;
 import ru.moscow.heat.trace.dto.TieInCandidate;
 import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
-import ru.moscow.heat.trace.dto.TraceResult as TraceDtoResult;
 import ru.moscow.heat.trace.dto.TraceStatus;
 import ru.moscow.heat.trace.dto.TraceStatusResponse;
 import ru.moscow.heat.trace.dto.VariantResult;
@@ -66,8 +65,11 @@ public class TraceService {
      * @throws UploadNotFoundException если сессия загрузки не найдена
      */
     public TraceAcceptedResponse createTraceSession(UUID uploadId) {
-        if (!uploadSessionRepository.existsById(uploadId)) {
-            throw new UploadNotFoundException(uploadId);
+        if (uploadId == null
+                || !uploadSessionRepository.existsById(uploadId)) {
+            throw new UploadNotFoundException(
+                    "Сессия загрузки с id=" + uploadId
+                            + " не найдена");
         }
 
         UUID traceId = UUID.randomUUID();

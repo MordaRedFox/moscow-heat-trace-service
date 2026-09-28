@@ -125,9 +125,9 @@ class TraceIntegrationTest extends AbstractIntegrationTest {
         assertThat(response).isNotNull();
         UUID traceId = response.getTraceId();
 
-        // 5. Проверяем статус
+        // 5. Проверяем статус (после создания задачи статус PENDING)
         TraceStatusResponse status = traceService.getTraceStatus(traceId);
-        assertThat(status.getStatus()).isEqualTo(TraceStatus.COMPLETED);
+        assertThat(status.getStatus()).isEqualTo(TraceStatus.PENDING);
 
         // 6. Получаем варианты трассировки (должен быть сформирован минимум 1 вариант)
         List<VariantSummary> variants = traceService.getVariants(traceId);

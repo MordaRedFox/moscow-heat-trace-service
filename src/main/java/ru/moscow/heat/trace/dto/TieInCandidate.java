@@ -1,5 +1,6 @@
-﻿package ru.moscow.heat.trace.dto;
+package ru.moscow.heat.trace.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.GeometryFactory;
@@ -113,6 +114,7 @@ public final class TieInCandidate {
     }
 
     /** @return тип присоединения (синоним для обратной совместимости) */
+    @JsonIgnore
     public TieInType getTieInType() {
         return type;
     }
@@ -151,11 +153,13 @@ public final class TieInCandidate {
     }
 
     /** @return геометрия точки присоединения на сети */
+    @JsonIgnore
     public Point getTieInPoint() {
         return GF.createPoint(new Coordinate(tieInLongitude, tieInLatitude));
     }
 
     /** @return геометрия целевой точки маршрута */
+    @JsonIgnore
     public Point getTargetPoint() {
         return GF.createPoint(new Coordinate(targetLongitude, targetLatitude));
     }
@@ -176,6 +180,7 @@ public final class TieInCandidate {
     }
 
     /** @return текущее число примыканий у камеры (синоним для обратной совместимости) */
+    @JsonIgnore
     public Integer getCurrentChamberConnections() {
         return currentAttachments;
     }
@@ -191,6 +196,7 @@ public final class TieInCandidate {
     }
 
     /** @return ДУ новой камеры (синоним для обратной совместимости) */
+    @JsonIgnore
     public Integer getRequiredChamberDiameter() {
         return newChamberDiameter;
     }

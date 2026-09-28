@@ -174,7 +174,7 @@ public class VariantGenerator {
                         segId, oksNode, tieInNode, line, length, spec.getDiameterMm(), flow, 1.0, 1.0, null
                 ));
                 allSegments.add(seg);
-                recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
+                recordTieInSegment(tieIn, seg.getStringId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
             } else {
                 // Несколько ОКС подключаются к одной врезке: создаем разветвительный технический узел (центроид)
                 double sumX = 0, sumY = 0;
@@ -199,7 +199,7 @@ public class VariantGenerator {
                         mainSegId, techNode, tieInNode, mainLine, mainLength, mainSpec.getDiameterMm(), totalFlow, 1.0, 1.0, null
                 ));
                 allSegments.add(mainSeg);
-                recordTieInSegment(tieIn, mainSeg.getId(), tieInSegmentsMap, allChambers, mainSpec.getDiameterMm(), newChamberUuidMap);
+                recordTieInSegment(tieIn, mainSeg.getStringId(), tieInSegmentsMap, allChambers, mainSpec.getDiameterMm(), newChamberUuidMap);
 
                 // Ответвления от каждого ОКС до технического узла
                 for (OksConnectionPointEntity p : groupPoints) {
@@ -269,7 +269,7 @@ public class VariantGenerator {
                     segId, oksNode, tieInNode, line, length, spec.getDiameterMm(), flow, 1.0, 1.0, null
             ));
             allSegments.add(seg);
-            recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
+            recordTieInSegment(tieIn, seg.getStringId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
         }
 
         List<ExistingChamberTieIn> tieIns = buildExistingTieIns(tieInSegmentsMap);
@@ -334,7 +334,7 @@ public class VariantGenerator {
                     segId, oksNode, tieInNode, line, length, spec.getDiameterMm(), flow, 1.0, 1.0, null
             ));
             allSegments.add(seg);
-            recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
+            recordTieInSegment(tieIn, seg.getStringId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
         }
 
         List<ExistingChamberTieIn> tieIns = buildExistingTieIns(tieInSegmentsMap);
