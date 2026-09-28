@@ -139,8 +139,8 @@ class TraceGeoJsonExporterIntegrationTest {
         JsonNode coords = netGeom.get("coordinates");
         double lon0 = coords.get(0).get(0).asDouble();
         double lat0 = coords.get(0).get(1).asDouble();
-        assertThat(lon0).isBetween(36.0, 39.0);
-        assertThat(lat0).isBetween(54.0, 57.0);
+        assertThat(lon0).isBetween(37.0, 38.0);
+        assertThat(lat0).isBetween(55.0, 56.0);
 
         // 2. Проверяем узел technical_node с числовым id 1001
         JsonNode techNodeFeature = findFeatureByObjectType(features, "technical_node");
@@ -195,6 +195,61 @@ class TraceGeoJsonExporterIntegrationTest {
         JsonNode root = objectMapper.readTree(baos.toByteArray());
         assertThat(root.get("type").asText()).isEqualTo("FeatureCollection");
         assertThat(root.get("features").isArray()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Отсутствие двойного проецирования, когда геометрия уже в WGS84")
+    void testNoDoubleProjectionWhenInputAlreadyWgs84() throws Exception {
+        Point pWgs1 = gf.createPoint(new Coordinate(37.6156, 55.7522));
+        pWgs1.setSRID(CoordinateTransformService.SRID_WGS84);
+        Point pWgs2 = gf.createPoint(new Coordinate(37.6160, 55.7525));
+        pWgs2.setSRID(CoordinateTransformService.SRID_WGS84);
+
+        RouteNode node1 = new RouteNode("node-wgs-1", "n1", pWgs1, "technical_node");
+        RouteNode node2 = new RouteNode("node-wgs-2", "n2", pWgs2, "oks");
+
+        LineString wgsLine = gf.createLineString(new Coordinate[]{
+                pWgs1.getCoordinate(), pWgs2.getCoordinate()
+        });
+        wgsLine.setSRID(CoordinateTransformService.SRID_WGS84);
+
+        RouteSegment segment = new RouteSegment(
+                "seg-wgs",
+                node1,
+                node2,
+                wgsLine,
+                50.0,
+                150,
+                10.0,
+                1.0,
+                1.0,
+                BigDecimal.valueOf(5_000_000L)
+        );
+
+        NewChamber chamber = new NewChamber("ch-wgs", pWgs1, 150, BigDecimal.valueOf(3_000_000L));
+        VariantSummary summary = new VariantSummary(
+                "v-wgs", 1, BigDecimal.ZERO, BigDecimal.ZERO, 0, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 50.0, 1.0, List.of()
+        );
+        VariantResult variant = new VariantResult("v-wgs", List.of(segment), List.of(chamber), List.of(), List.of(), summary);
+
+        StreamingResponseBody body = exporter.exportVariantStreaming(variant);
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        body.writeTo(baos);
+
+        JsonNode root = objectMapper.readTree(baos.toByteArray());
+        JsonNode features = root.get("features");
+
+        JsonNode netFeature = findFeatureByObjectType(features, "heat_network");
+        assertThat(netFeature).isNotNull();
+        JsonNode coords = netFeature.get("geometry").get("coordinates");
+        assertThat(coords.get(0).get(0).asDouble()).isEqualTo(37.6156, org.assertj.core.data.Offset.offset(1e-4));
+        assertThat(coords.get(0).get(1).asDouble()).isEqualTo(55.7522, org.assertj.core.data.Offset.offset(1e-4));
+
+        JsonNode chamberFeature = findFeatureByObjectType(features, "heat_chamber");
+        assertThat(chamberFeature).isNotNull();
+        JsonNode chamberCoords = chamberFeature.get("geometry").get("coordinates");
+        assertThat(chamberCoords.get(0).asDouble()).isEqualTo(37.6156, org.assertj.core.data.Offset.offset(1e-4));
+        assertThat(chamberCoords.get(1).asDouble()).isEqualTo(55.7522, org.assertj.core.data.Offset.offset(1e-4));
     }
 
     private JsonNode findFeatureByObjectType(JsonNode features, String objectType) {

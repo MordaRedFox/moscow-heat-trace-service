@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import org.springframework.stereotype.Service;
@@ -129,7 +130,7 @@ public class TraceGeoJsonExporter {
         writeParsedId(gen, "id", segment.getStringId());
 
         // Геометрия LineString в WGS84
-        LineString wgs84Line = (LineString) coordinateTransformService.toWgs84(segment.getGeometry());
+        LineString wgs84Line = (LineString) ensureWgs84(segment.getGeometry());
         gen.writeObjectFieldStart("geometry");
         gen.writeStringField("type", "LineString");
         gen.writeArrayFieldStart("coordinates");
@@ -171,7 +172,7 @@ public class TraceGeoJsonExporter {
         gen.writeStringField("type", "Feature");
         writeParsedId(gen, "id", chamber.getId());
 
-        Point wgs84Point = (Point) coordinateTransformService.toWgs84(chamber.getGeometry());
+        Point wgs84Point = (Point) ensureWgs84(chamber.getGeometry());
         writePointGeometry(gen, wgs84Point);
 
         gen.writeObjectFieldStart("properties");
@@ -211,7 +212,7 @@ public class TraceGeoJsonExporter {
         gen.writeStringField("type", "Feature");
         writeParsedId(gen, "id", effectiveId);
 
-        Point wgs84Point = (Point) coordinateTransformService.toWgs84(node.getPoint());
+        Point wgs84Point = (Point) ensureWgs84(node.getPoint());
         writePointGeometry(gen, wgs84Point);
 
         gen.writeObjectFieldStart("properties");
@@ -258,6 +259,20 @@ public class TraceGeoJsonExporter {
 
         gen.writeEndObject(); // properties
         gen.writeEndObject(); // feature
+    }
+
+    private Geometry ensureWgs84(Geometry geometry) {
+        if (geometry == null) {
+            return null;
+        }
+        if (geometry.getSRID() == CoordinateTransformService.SRID_WGS84) {
+            return geometry;
+        }
+        Coordinate c = geometry.getCoordinate();
+        if (c != null && Math.abs(c.getX()) <= 180.0 && Math.abs(c.getY()) <= 90.0) {
+            return geometry;
+        }
+        return coordinateTransformService.toWgs84(geometry);
     }
 
     private void writePointGeometry(JsonGenerator gen, Point point) throws IOException {
