@@ -12,9 +12,11 @@ import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Polygon;
 import org.springframework.beans.factory.annotation.Autowired;
 import ru.moscow.heat.AbstractIntegrationTest;
+import ru.moscow.heat.geojson.entity.HeatChamberEntity;
 import ru.moscow.heat.geojson.entity.HeatNetworkEntity;
 import ru.moscow.heat.geojson.entity.OksConnectionPointEntity;
 import ru.moscow.heat.geojson.entity.RestrictionEntity;
+import ru.moscow.heat.geojson.repository.HeatChamberRepository;
 import ru.moscow.heat.geojson.repository.HeatNetworkRepository;
 import ru.moscow.heat.geojson.repository.OksConnectionPointRepository;
 import ru.moscow.heat.geojson.repository.RestrictionRepository;
@@ -28,20 +30,24 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Интеграционный тест {@link TraceOrchestrator} - сквозной прогон
- * на PostGIS/Testcontainers
- * <p>
- * Сценарий: точка ОКС лежит внутри своего полигона {@code restriction_type=oks},
- * рядом проходит существующая сеть без камер. Ожидается:
- * <ul>
- *   <li>трассировка не падает;</li>
- *   <li>ОКС подключён (обход своего полигона через ignore-set);</li>
- *   <li>тип новой камеры = {@link RouteNodeType#NEW_CHAMBER};</li>
- *   <li>первый узел маршрута = {@link RouteNodeType#OKS_POINT};</li>
- *   <li>все сегменты имеют одинаковый flow (один ОКС);</li>
- *   <li>flow на сегментах соответствует flow_tph ОКС;</li>
- *   <li>счётчики корректны (total=1, connected=1, unconnected=0).</li>
- * </ul>
+ * Интеграционный тест {@link TraceOrchestrator} — сквозной прогон
+ * на PostGIS/Testcontainers.
+ *
+ * <p>Проверяются два сценария:
+ * <ol>
+ *   <li>один ОКС внутри своего полигона {@code restriction_type=oks},
+ *       сеть рядом — одиночный линейный пайплайн;</li>
+ *   <li>три ОКС над одной сетью с существующей камерой — групповой
+ *       пайплайн итерации 6 (камерная группировка, дерево маршрутов,
+ *       все точки подключены).</li>
+ * </ol>
+ *
+ * <p>Проверяется <b>факт успешного подключения</b> всех ОКС группы,
+ * а не конкретная топология дерева (число общих стволов, точные flow
+ * на ветвях). Топология зависит от геометрии visibility graph и не
+ * является контрактом оркестратора — её покрывают юнит-тесты
+ * {@code TreeRouterTest}, {@code FlowAggregatorTest},
+ * {@code TreeDiameterAssignerTest}, {@code TreeRouteSegmentSplitterTest}.
  */
 @DisplayName("Интеграционный тест TraceOrchestrator")
 class TraceOrchestratorIntegrationTest extends AbstractIntegrationTest {
@@ -57,6 +63,9 @@ class TraceOrchestratorIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private RestrictionRepository restrictionRepo;
+
+    @Autowired
+    private HeatChamberRepository heatChamberRepo;
 
     @Autowired
     private CoordinateTransformService transformService;
@@ -103,25 +112,78 @@ class TraceOrchestratorIntegrationTest extends AbstractIntegrationTest {
         assertThat(result.getSegments()).isNotEmpty();
 
         RouteSegment first = result.getSegments().get(0);
-        RouteSegment last = result.getSegments().get(result.getSegments().size() - 1);
+        RouteSegment last = result.getSegments()
+                .get(result.getSegments().size() - 1);
 
-        assertThat(first.getFromNode().getType()).isEqualTo(RouteNodeType.OKS_POINT);
-        assertThat(first.getFromNode().getSourceFeatureId()).isEqualTo("oks-pt-1");
+        assertThat(first.getFromNode().getType())
+                .isEqualTo(RouteNodeType.OKS_POINT);
+        assertThat(first.getFromNode().getSourceFeatureId())
+                .isEqualTo("oks-pt-1");
 
-        // Тип конечного узла: NEW_CHAMBER — камер нет, значит новая
-        assertThat(last.getToNode().getType()).isEqualTo(RouteNodeType.NEW_CHAMBER);
+        // Камер нет, значит новая
+        assertThat(last.getToNode().getType())
+                .isEqualTo(RouteNodeType.NEW_CHAMBER);
 
-        // flow на всех сегментах = flow_tph ОКС
+        // flow на всех сегментах = flow_tph ОКС (одиночный маршрут)
         for (RouteSegment s : result.getSegments()) {
             assertThat(s.getFlowTph().doubleValue()).isEqualTo(30.0);
             assertThat(s.getDiameterMm()).isPositive();
         }
 
-        // Одна новая камера создана
         assertThat(result.getNewChambers()).hasSize(1);
     }
 
-    // Хелперы
+    @Test
+    @DisplayName("3 ОКС над одной сетью с камерой — все подключены")
+    void threeOksToOneChamber_allConnected() {
+        // Сеть — горизонтальный сегмент около baseX
+        saveNetwork(uploadId, "net-group", 500,
+                baseX - 100, baseY,
+                baseX + 100, baseY);
+
+        // Существующая камера на середине сети
+        saveChamber(uploadId, "chamber-1", baseX, baseY);
+
+        // Три ОКС над сетью, все в радиусе 10 м от камеры по tie-in
+        // (ближайшая точка на сети к каждому ОКС лежит около камеры)
+        saveConnectionPoint(uploadId, "oks-g1", 20.0,
+                baseX - 5, baseY + 20);
+        saveConnectionPoint(uploadId, "oks-g2", 30.0,
+                baseX, baseY + 25);
+        saveConnectionPoint(uploadId, "oks-g3", 15.0,
+                baseX + 5, baseY + 20);
+
+        TraceResult result = traceOrchestrator.run(uploadId);
+
+        // Все три подключены — групповой пайплайн не упал
+        assertThat(result.getSummaryCounters().getTotalOksCount()).isEqualTo(3);
+        assertThat(result.getSummaryCounters().getConnectedCount()).isEqualTo(3);
+        assertThat(result.getSummaryCounters().getUnconnectedCount()).isZero();
+        assertThat(result.getUnconnectedOks()).isEmpty();
+
+        // Сегменты построены и валидны
+        assertThat(result.getSegments()).isNotEmpty();
+        assertThat(result.getSegments()).allSatisfy(seg -> {
+            assertThat(seg.getDiameterMm()).isPositive();
+            assertThat(seg.getLengthM()).isPositive();
+        });
+    }
+
+    // ---------- Хелперы ----------
+
+    private void saveChamber(UUID uid, String featureId, double x, double y) {
+        Point ptUtm = gf.createPoint(new Coordinate(x, y));
+        ptUtm.setSRID(CoordinateTransformService.SRID_UTM_37N);
+        Point ptWgs = (Point) transformService.toWgs84(ptUtm);
+
+        HeatChamberEntity chamber = HeatChamberEntity.builder().build();
+        chamber.setUploadId(uid);
+        chamber.setFeatureId(featureId);
+        chamber.setGeometry(ptWgs);
+        chamber.setGeometryUtm(ptUtm);
+        chamber.setProperties(mapper.createObjectNode());
+        heatChamberRepo.save(chamber);
+    }
 
     private void saveOksPolygon(UUID uid, String featureId,
                                  double minX, double minY,

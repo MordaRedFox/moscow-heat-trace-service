@@ -18,45 +18,42 @@ import ru.moscow.heat.trace.graph.ObstacleModel;
 import ru.moscow.heat.trace.graph.ObstacleModelBuilder;
 import ru.moscow.heat.trace.graph.VisibilityGraph;
 import ru.moscow.heat.trace.model.NewChamber;
+import ru.moscow.heat.trace.model.OksGroup;
 import ru.moscow.heat.trace.model.RouteNodeType;
 import ru.moscow.heat.trace.model.RouteSegment;
+import ru.moscow.heat.trace.model.RouteTree;
 import ru.moscow.heat.trace.model.TechnicalNode;
 import ru.moscow.heat.trace.model.TraceResult;
+import ru.moscow.heat.trace.model.TreeEdge;
 import ru.moscow.heat.trace.model.UnconnectedOks;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 /**
- * Главный сценарий трассировки одной загрузки (план, шаги 1-10)
- * <p>Работает в UTM целиком. Единственная трансформация координат —
- * перевод {@code TieInCandidate.targetXxx} (WGS84) в UTM для {@code endUtm}
- * <p>Обход полигона своего ОКС реализуется через параметр
- * {@code ignoredForbiddenIds} в {@link VisibilityGraph#shortestPath} и
- * {@link RouteSimplifier#simplify}: для каждой точки ОКС находится id её
- * полигона через {@link OksConnectionPointResolver}, и этот буфер
- * игнорируется при проверке видимости от стартовой точки. Так
- * обеспечивается правило ТП «финальный прямой участок от границы полигона
- * до точки подключения не проверяется на отступ к этому полигону»
- * <p>Проверка углов пересечения с road/tram_tracks выполняется после
- * упрощения пути через {@link AngleChecker}: для каждого сегмента
- * проверяются все спецзоны, требующие угла, и при нарушении ОКС
- * отправляется в {@link UnconnectedOks#PATH_REJECTED_BY_VALIDATION}.
- * <p>Конвейер на один ОКС:
+ * Главный сценарий трассировки одной загрузки (итерация 6).
+ * <p>
+ * Конвейер на загрузку:
  * <ol>
- *     <li>{@link TieInCandidateService#findCandidates} → берём первого;</li>
- *     <li>найти id своего ОКС-полигона через resolver;</li>
- *     <li>{@link VisibilityGraph#shortestPath} с ignore-set;</li>
- *     <li>{@link RouteSimplifier#simplify} с ignore-set;</li>
- *     <li>{@link AngleChecker} — проверка углов в спецзонах;</li>
- *     <li>{@link RouteSegmentSplitter#split} — сохранение топологии;</li>
- *     <li>{@link DiameterAssigner#assign} — назначение ДУ;</li>
- *     <li>{@link LengthValidator#validate} — защитная проверка.</li>
+ *     <li>Построение {@link ObstacleModel} и {@link VisibilityGraph};</li>
+ *     <li>Подбор кандидатов врезки для всех ОКС;</li>
+ *     <li>{@link OksGrouper}: группировка ОКС по общему тай-ину;</li>
+ *     <li>Для каждой много-ОКС группы:
+ *         {@link TreeRouter} → (проверка углов) →
+ *         {@link FlowAggregator} → {@link TreeDiameterAssigner} →
+ *         {@link TreeRouteSegmentSplitter}. При любой ошибке
+ *         (дерево не построено / угол / сходимость ДУ / иное) —
+ *         fallback на поштучную обработку группы.</li>
+ *     <li>Для одиночных ОКС: линейный пайплайн
+ *         (A* → simplify → angle → split → diameter → validate);</li>
+ *     <li>Сборка {@link TraceResult}.</li>
  * </ol>
  */
 @Slf4j
@@ -78,57 +75,209 @@ public class TraceOrchestrator {
     private final DiameterAssigner diameterAssigner;
     private final LengthValidator lengthValidator;
 
+    // === Сервисы итерации 6 ===
+    private final OksGrouper oksGrouper;
+    private final TreeRouter treeRouter;
+    private final FlowAggregator flowAggregator;
+    private final TreeDiameterAssigner treeDiameterAssigner;
+    private final TreeRouteSegmentSplitter treeRouteSegmentSplitter;
+
     /**
-     * Выполняет расчет трассировки для загрузки
+     * Выполняет расчёт трассировки для загрузки.
+     *
      * @param uploadId id загрузки
      * @return {@link TraceResult}
      */
     public TraceResult run(UUID uploadId) {
-        List<OksConnectionPointEntity> oksPoints = oksRepository.findByUploadId(uploadId);
+        List<OksConnectionPointEntity> oksPoints =
+                oksRepository.findByUploadId(uploadId);
         log.info("Трассировка uploadId={}: {} перспективных ОКС",
                 uploadId, oksPoints.size());
 
         ObstacleModel obstacleModel = obstacleModelBuilder.build(uploadId);
-
         VisibilityGraph graph = new VisibilityGraph(obstacleModel);
         graph.build();
+
+        Map<String, List<TieInCandidate>> allCandidates =
+                tieInCandidateService.findCandidatesForAllPoints(uploadId);
+
+        List<OksConnectionPointEntity> validOks = new ArrayList<>();
+        List<UnconnectedOks> unconnected = new ArrayList<>();
+        Map<String, TieInCandidate> selectedCandidates = new HashMap<>();
+
+        for (OksConnectionPointEntity oks : oksPoints) {
+            List<TieInCandidate> candidates =
+                    allCandidates.get(oks.getFeatureId());
+            if (candidates == null || candidates.isEmpty()) {
+                unconnected.add(new UnconnectedOks(oks.getFeatureId(),
+                        UnconnectedOks.Reason.NO_TIE_IN_CANDIDATE,
+                        "TieInCandidateService не вернул кандидатов"));
+            } else {
+                validOks.add(oks);
+                selectedCandidates.put(oks.getFeatureId(), candidates.get(0));
+            }
+        }
+
+        List<OksGroup> groups = oksGrouper.group(validOks, selectedCandidates);
 
         List<RouteSegment> allSegments = new ArrayList<>();
         List<TechnicalNode> allTechnicalNodes = new ArrayList<>();
         List<NewChamber> allNewChambers = new ArrayList<>();
-        List<UnconnectedOks> unconnected = new ArrayList<>();
 
-        for (OksConnectionPointEntity oks : oksPoints) {
-            processOne(oks, uploadId, obstacleModel, graph,
-                    allSegments, allTechnicalNodes, allNewChambers, unconnected);
+        int multiGroupCount = 0;
+        int fallbackCount = 0;
+
+        for (OksGroup group : groups) {
+            if (group.isMulti()) {
+                boolean success;
+                try {
+                    success = processGroup(group, uploadId,
+                            obstacleModel, graph,
+                            allSegments, allTechnicalNodes,
+                            allNewChambers, unconnected);
+                } catch (Exception e) {
+                    log.error("Непредвиденная ошибка при обработке группы "
+                                    + "из {} ОКС: {}",
+                            group.size(), e.getMessage(), e);
+                    fallbackToIndividual(group, uploadId,
+                            obstacleModel, graph,
+                            allSegments, allTechnicalNodes,
+                            allNewChambers, unconnected);
+                    success = false;
+                }
+                if (success) {
+                    multiGroupCount++;
+                } else {
+                    fallbackCount++;
+                }
+            } else {
+                processOne(group.getPoints().get(0),
+                        group.getCandidates().get(0),
+                        uploadId, obstacleModel, graph,
+                        allSegments, allTechnicalNodes,
+                        allNewChambers, unconnected);
+            }
         }
 
-        TraceResult.SummaryCounters counters = new TraceResult.SummaryCounters(
-                oksPoints.size(),
-                oksPoints.size() - unconnected.size(),
+        log.info("Трассировка завершена: {} групп ({} много-ОКС, "
+                        + "{} fallback), {} сегментов, {} камер, "
+                        + "{} неподключённых",
+                groups.size(), multiGroupCount, fallbackCount,
+                allSegments.size(), allNewChambers.size(),
                 unconnected.size());
 
-        return new TraceResult(allSegments, allNewChambers, allTechnicalNodes,
-                unconnected, counters);
+        TraceResult.SummaryCounters counters =
+                new TraceResult.SummaryCounters(
+                        oksPoints.size(),
+                        oksPoints.size() - unconnected.size(),
+                        unconnected.size());
+
+        return new TraceResult(allSegments, allNewChambers,
+                allTechnicalNodes, unconnected, counters);
     }
 
-    private void processOne(OksConnectionPointEntity oks, UUID uploadId,
-                             ObstacleModel obstacleModel, VisibilityGraph graph,
-                             List<RouteSegment> allSegments,
-                             List<TechnicalNode> allTechnicalNodes,
-                             List<NewChamber> allNewChambers,
-                             List<UnconnectedOks> unconnected) {
+    // ================================================================
+    // Групповой пайплайн
+    // ================================================================
 
-        // Шаг 2. Кандидат врезки — MVP берёт первого (наивысший приоритет)
-        List<TieInCandidate> candidates = tieInCandidateService
-                .findCandidates(uploadId, oks.getFeatureId());
-        if (candidates.isEmpty()) {
-            unconnected.add(new UnconnectedOks(oks.getFeatureId(),
-                    UnconnectedOks.Reason.NO_TIE_IN_CANDIDATE,
-                    "TieInCandidateService не вернул ни одного кандидата"));
-            return;
+    /**
+     * Обрабатывает группу из нескольких ОКС через дерево маршрутов.
+     * При любой ошибке — fallback на поштучную обработку.
+     *
+     * @return {@code true}, если группа обработана как дерево
+     */
+    private boolean processGroup(OksGroup group, UUID uploadId,
+                                 ObstacleModel obstacleModel,
+                                 VisibilityGraph graph,
+                                 List<RouteSegment> allSegments,
+                                 List<TechnicalNode> allTechNodes,
+                                 List<NewChamber> allChambers,
+                                 List<UnconnectedOks> unconnected) {
+
+        // Шаг 2: построение дерева
+        RouteTree tree = treeRouter.buildTree(group, uploadId, graph,
+                obstacleModel);
+        if (tree == null) {
+            log.warn("Группа {} ОКС: дерево не построено — поштучная обработка",
+                    group.size());
+            fallbackToIndividual(group, uploadId, obstacleModel, graph,
+                    allSegments, allTechNodes, allChambers, unconnected);
+            return false;
         }
-        TieInCandidate candidate = candidates.get(0);
+
+        // Шаг 2б: проверка углов пересечения по рёбрам дерева
+        String angleViolation = checkTreeAngles(tree, obstacleModel);
+        if (angleViolation != null) {
+            log.warn("Группа {} ОКС: {} — поштучная обработка",
+                    group.size(), angleViolation);
+            fallbackToIndividual(group, uploadId, obstacleModel, graph,
+                    allSegments, allTechNodes, allChambers, unconnected);
+            return false;
+        }
+
+        // Шаги 3–4: агрегация расходов и назначение ДУ
+        try {
+            flowAggregator.aggregate(tree, group);
+            treeDiameterAssigner.assign(tree);
+        } catch (IllegalStateException e) {
+            log.warn("Группа {} ОКС: не удалось назначить ДУ ({}) — "
+                            + "поштучная обработка",
+                    group.size(), e.getMessage());
+            fallbackToIndividual(group, uploadId, obstacleModel, graph,
+                    allSegments, allTechNodes, allChambers, unconnected);
+            return false;
+        }
+
+        // Шаг 5: разбиение на сегменты + камеры ветвлений и корня
+        TreeRouteSegmentSplitter.SplitResult splitResult =
+                treeRouteSegmentSplitter.split(tree, obstacleModel,
+                        group.getSharedTieIn());
+
+        allSegments.addAll(splitResult.getSegments());
+        allTechNodes.addAll(splitResult.getTechnicalNodes());
+        allChambers.addAll(splitResult.getNewChambers());
+
+        log.debug("Группа {} ОКС: дерево={}, сегментов={}, камер={}",
+                group.size(), tree,
+                splitResult.getSegments().size(),
+                splitResult.getNewChambers().size());
+
+        return true;
+    }
+
+    /**
+     * Fallback: обрабатывает каждый ОКС группы независимо через
+     * линейный пайплайн. Используется при любой ошибке группового
+     * расчёта — сервис не должен терять точки из-за одной проблемы.
+     */
+    private void fallbackToIndividual(OksGroup group, UUID uploadId,
+                                      ObstacleModel obstacleModel,
+                                      VisibilityGraph graph,
+                                      List<RouteSegment> allSegments,
+                                      List<TechnicalNode> allTechNodes,
+                                      List<NewChamber> allChambers,
+                                      List<UnconnectedOks> unconnected) {
+        for (int i = 0; i < group.getPoints().size(); i++) {
+            processOne(group.getPoints().get(i),
+                    group.getCandidates().get(i),
+                    uploadId, obstacleModel, graph,
+                    allSegments, allTechNodes, allChambers, unconnected);
+        }
+    }
+
+    // ================================================================
+    // Линейный пайплайн (одиночные ОКС)
+    // ================================================================
+
+    private void processOne(OksConnectionPointEntity oks,
+                            TieInCandidate candidate,
+                            UUID uploadId,
+                            ObstacleModel obstacleModel,
+                            VisibilityGraph graph,
+                            List<RouteSegment> allSegments,
+                            List<TechnicalNode> allTechnicalNodes,
+                            List<NewChamber> allNewChambers,
+                            List<UnconnectedOks> unconnected) {
 
         if (!(oks.getGeometryUtm() instanceof Point)) {
             unconnected.add(new UnconnectedOks(oks.getFeatureId(),
@@ -139,20 +288,12 @@ public class TraceOrchestrator {
         Coordinate startUtm = ((Point) oks.getGeometryUtm()).getCoordinate();
         Coordinate endUtm = candidateCoordinateUtm(candidate);
 
-        // Шаг 2б. Найти id своего ОКС-полигона и подготовить ignore-set
         Optional<Long> oksPolygonId = oksResolver
                 .resolvePolygonDatabaseId(uploadId, oks.getFeatureId());
         Set<Long> ignoredForbiddenIds = oksPolygonId
                 .map(Collections::singleton)
                 .orElseGet(Collections::emptySet);
 
-        if (oksPolygonId.isEmpty()) {
-            log.debug("Точка ОКС {} не связана с полигоном — трассировка "
-                            + "без исключений из FORBIDDEN-зон",
-                    oks.getFeatureId());
-        }
-
-        // Шаг 5. Поиск пути A* по графу видимости
         VisibilityGraph.PathResult pathResult = graph.shortestPath(
                 startUtm, endUtm, ignoredForbiddenIds);
         if (!pathResult.isFound()) {
@@ -163,12 +304,12 @@ public class TraceOrchestrator {
             return;
         }
 
-        // Шаг 6. Упростить путь (убрать зигзаги)
         List<Coordinate> simplifiedPath = routeSimplifier
-                .simplify(pathResult.getPathUtm(), obstacleModel, ignoredForbiddenIds);
+                .simplify(pathResult.getPathUtm(), obstacleModel,
+                        ignoredForbiddenIds);
 
-        // Шаг 6б. Проверка углов пересечения road/tram_tracks
-        String angleViolation = checkCrossingAngles(simplifiedPath, obstacleModel);
+        String angleViolation = checkCrossingAngles(
+                simplifiedPath, obstacleModel);
         if (angleViolation != null) {
             unconnected.add(new UnconnectedOks(oks.getFeatureId(),
                     UnconnectedOks.Reason.PATH_REJECTED_BY_VALIDATION,
@@ -179,23 +320,23 @@ public class TraceOrchestrator {
         BigDecimal flowTph = BigDecimal.valueOf(
                 oks.getFlowTph() != null ? oks.getFlowTph() : 0.0);
 
-        // Шаг 7. Разбить по границам спецзон, сохраняя топологию RouteNode
-        RouteNodeType endNodeType = candidate.getType() == TieInType.EXISTING_CHAMBER
-                ? RouteNodeType.EXISTING_CHAMBER
-                : RouteNodeType.NEW_CHAMBER;
-        String endFeatureId = candidate.getType() == TieInType.EXISTING_CHAMBER
-                ? candidate.getExistingChamberId()
-                : null;
+        RouteNodeType endNodeType =
+                candidate.getType() == TieInType.EXISTING_CHAMBER
+                        ? RouteNodeType.EXISTING_CHAMBER
+                        : RouteNodeType.NEW_CHAMBER;
+        String endFeatureId =
+                candidate.getType() == TieInType.EXISTING_CHAMBER
+                        ? candidate.getExistingChamberId()
+                        : null;
 
-        RouteSegmentSplitter.SplitResult splitResult = routeSegmentSplitter
-                .split(simplifiedPath, obstacleModel, flowTph,
-                        oks.getFeatureId(), endNodeType, endFeatureId);
+        RouteSegmentSplitter.SplitResult splitResult =
+                routeSegmentSplitter.split(simplifiedPath, obstacleModel,
+                        flowTph, oks.getFeatureId(),
+                        endNodeType, endFeatureId);
 
-        // Шаг 8. Назначить ДУ
         DiameterAssigner.AssignmentResult assignmentResult =
                 diameterAssigner.assign(splitResult.getSegments(), flowTph);
 
-        // Шаг 9. Защитная проверка предельной длины
         LengthValidator.ValidationResult validation =
                 lengthValidator.validate(assignmentResult.getSegments());
         if (!validation.isValid()) {
@@ -209,7 +350,6 @@ public class TraceOrchestrator {
         allTechnicalNodes.addAll(splitResult.getTechnicalNodes());
         allTechnicalNodes.addAll(assignmentResult.getTechnicalNodes());
 
-        // Новая камера - только если кандидат требует ее строительства
         if (candidate.getType() == TieInType.NEW_CHAMBER) {
             allNewChambers.add(new NewChamber(UUID.randomUUID(), endUtm,
                     candidate.getNewChamberDiameter() != null
@@ -218,13 +358,28 @@ public class TraceOrchestrator {
         }
     }
 
+    // ================================================================
+    // Проверка углов
+    // ================================================================
+
     /**
-     * Проверяет углы пересечения пути со всеми спецзонами, для которых
-     * задан {@code minCrossingAngleDeg}. Возвращает описание первого
-     * нарушения или {@code null}, если все в порядке
+     * Проверка углов пересечения по всем рёбрам дерева. Возвращает
+     * описание первого нарушения или {@code null}, если всё в порядке.
      */
+    private String checkTreeAngles(RouteTree tree,
+                                    ObstacleModel obstacleModel) {
+        for (TreeEdge edge : tree.getEdges()) {
+            String violation = checkCrossingAngles(
+                    edge.getGeometryUtm(), obstacleModel);
+            if (violation != null) {
+                return violation;
+            }
+        }
+        return null;
+    }
+
     private String checkCrossingAngles(List<Coordinate> pathUtm,
-                                        ObstacleModel obstacleModel) {
+                                       ObstacleModel obstacleModel) {
         for (int i = 0; i < pathUtm.size() - 1; i++) {
             Coordinate a = pathUtm.get(i);
             Coordinate b = pathUtm.get(i + 1);
@@ -232,16 +387,12 @@ public class TraceOrchestrator {
                     new Coordinate[]{a, b});
             segment.setSRID(32637);
 
-            for (ObstacleModel.SpecialZone zone : obstacleModel.getSpecialZones()) {
-                if (zone.getMinCrossingAngleDeg() == null) {
-                    continue;
-                }
-                if (!segment.intersects(zone.getSourceGeometryUtm())) {
-                    continue;
-                }
+            for (ObstacleModel.SpecialZone zone :
+                    obstacleModel.getSpecialZones()) {
+                if (zone.getMinCrossingAngleDeg() == null) continue;
+                if (!segment.intersects(zone.getSourceGeometryUtm())) continue;
                 boolean ok = angleChecker.isCrossingAngleValid(
-                        a, b,
-                        zone.getSourceGeometryUtm(),
+                        a, b, zone.getSourceGeometryUtm(),
                         zone.getMinCrossingAngleDeg());
                 if (!ok) {
                     return String.format(
@@ -256,12 +407,6 @@ public class TraceOrchestrator {
         return null;
     }
 
-    /**
-     * Единственное место конвертации координат: {@link TieInCandidate}
-     * хранит {@code targetXxx} в WGS84. Для {@link TieInType#EXISTING_CHAMBER}
-     * это координата камеры, для {@link TieInType#NEW_CHAMBER} — точка
-     * на сети
-     */
     private Coordinate candidateCoordinateUtm(TieInCandidate candidate) {
         Point targetWgs84 = GEOMETRY_FACTORY.createPoint(
                 new Coordinate(candidate.getTargetLongitude(),
