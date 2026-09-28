@@ -5,8 +5,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.locationtech.jts.geom.Coordinate;
-import org.locationtech.jts.geom.GeometryFactory;
-import org.locationtech.jts.geom.Point;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import ru.moscow.heat.geojson.entity.OksConnectionPointEntity;
@@ -16,16 +14,24 @@ import ru.moscow.heat.trace.model.RouteTree;
 import ru.moscow.heat.trace.model.TreeNode;
 
 import java.util.List;
-import java.util.stream.Collectors;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Unit-тесты {@link TreeRouter} (итерация 6, шаг 2).
+ *
+ * <p>Проверяется чистая логика объединения путей в дерево через
+ * {@link TreeRouter#buildTreeFromPaths} — без реального visibility
+ * graph и без A*.
+ *
+ * <p>Расход ОКС в построении дерева не участвует — он агрегируется
+ * отдельно {@code FlowAggregator}. В хелпере {@code oks()} подменяется
+ * только {@code getFeatureId()}, чтобы не было лишних mock-stub'ов.
+ */
 @ExtendWith(MockitoExtension.class)
 class TreeRouterTest {
-
-    private static final GeometryFactory GF = new GeometryFactory();
 
     @Mock
     private OksConnectionPointResolver oksResolver;
@@ -37,13 +43,15 @@ class TreeRouterTest {
 
     @BeforeEach
     void setUp() {
-        treeRouter = new TreeRouter(oksResolver, transformService);
+        // RouteSimplifier не имеет зависимостей и не вызывается
+        // в buildTreeFromPaths — передаём реальный экземпляр.
+        treeRouter = new TreeRouter(oksResolver, transformService,
+                new RouteSimplifier());
     }
 
-    private OksConnectionPointEntity oks(String featureId, double flow) {
+    private OksConnectionPointEntity oks(String featureId) {
         OksConnectionPointEntity entity = mock(OksConnectionPointEntity.class);
         when(entity.getFeatureId()).thenReturn(featureId);
-        when(entity.getFlowTph()).thenReturn(flow);
         return entity;
     }
 
@@ -62,7 +70,7 @@ class TreeRouterTest {
                 List.of(tieIn, branch, oks3)
         );
         List<OksConnectionPointEntity> oksList = List.of(
-                oks("1", 20.0), oks("2", 30.0), oks("3", 15.0));
+                oks("1"), oks("2"), oks("3"));
 
         RouteTree tree = treeRouter.buildTreeFromPaths(paths, oksList, tieIn);
 
@@ -72,13 +80,10 @@ class TreeRouterTest {
 
         TreeNode branchNode = tree.getBranchingNodes().get(0);
         assertThat(branchNode.getChildCount()).isEqualTo(3);
-        assertThat(branchNode.getCoordinateUtm().distance(branch)).isLessThan(1.0);
+        assertThat(branchNode.getCoordinateUtm().distance(branch))
+                .isLessThan(1.0);
 
         assertThat(tree.getRoot().getChildCount()).isEqualTo(1);
-
-        List<String> leafIds = tree.getLeaves().stream()
-                .map(TreeNode::getOksFeatureId)
-                .collect(Collectors.toList());
     }
 
     @Test
@@ -92,7 +97,7 @@ class TreeRouterTest {
                 List.of(tieIn, oks1),
                 List.of(tieIn, oks2)
         );
-        List<OksConnectionPointEntity> oksList = List.of(oks("1", 10.0), oks("2", 20.0));
+        List<OksConnectionPointEntity> oksList = List.of(oks("1"), oks("2"));
 
         RouteTree tree = treeRouter.buildTreeFromPaths(paths, oksList, tieIn);
 
@@ -109,7 +114,7 @@ class TreeRouterTest {
         Coordinate oks1 = new Coordinate(100, 0);
 
         List<List<Coordinate>> paths = List.of(List.of(tieIn, oks1));
-        List<OksConnectionPointEntity> oksList = List.of(oks("1", 10.0));
+        List<OksConnectionPointEntity> oksList = List.of(oks("1"));
 
         RouteTree tree = treeRouter.buildTreeFromPaths(paths, oksList, tieIn);
 
@@ -125,11 +130,13 @@ class TreeRouterTest {
         Coordinate oks1 = new Coordinate(100, 0);
 
         List<List<Coordinate>> paths = List.of(List.of(tieIn, oks1));
-        List<OksConnectionPointEntity> oksList = List.of(oks("1", 10.0));
+        List<OksConnectionPointEntity> oksList = List.of(oks("1"));
 
         RouteTree tree = treeRouter.buildTreeFromPaths(paths, oksList, tieIn);
 
-        assertThat(tree.getTotalLengthM()).isCloseTo(100.0, org.assertj.core.data.Offset.offset(0.01));
+        assertThat(tree.getTotalLengthM())
+                .isCloseTo(100.0,
+                        org.assertj.core.data.Offset.offset(0.01));
     }
 
     @Test
@@ -144,7 +151,7 @@ class TreeRouterTest {
                 List.of(tieIn, mid, oks1),
                 List.of(tieIn, mid, oks2)
         );
-        List<OksConnectionPointEntity> oksList = List.of(oks("1", 10.0), oks("2", 20.0));
+        List<OksConnectionPointEntity> oksList = List.of(oks("1"), oks("2"));
 
         RouteTree tree = treeRouter.buildTreeFromPaths(paths, oksList, tieIn);
 
@@ -152,7 +159,8 @@ class TreeRouterTest {
         assertThat(tree.getBranchingNodes()).hasSize(1);
 
         TreeNode branchNode = tree.getBranchingNodes().get(0);
-        assertThat(branchNode.getCoordinateUtm().distance(mid)).isLessThan(1.0);
+        assertThat(branchNode.getCoordinateUtm().distance(mid))
+                .isLessThan(1.0);
         assertThat(branchNode.getChildCount()).isEqualTo(2);
         assertThat(tree.getRoot().getChildCount()).isEqualTo(1);
     }

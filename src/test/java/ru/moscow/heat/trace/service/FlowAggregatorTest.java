@@ -84,9 +84,6 @@ class FlowAggregatorTest {
     @Test
     @DisplayName("Вложенное ветвление: расход накапливается по уровням")
     void nestedBranching_flowAccumulatesPerLevel() {
-        // root -> b1 -> b2 -> leaf3
-        //            -> leaf2
-        //      -> leaf1
         TreeNode root = new TreeNode(UUID.randomUUID(), new Coordinate(0, 0),
                 TreeNode.TreeNodeType.ROOT, null);
         TreeNode b1 = new TreeNode(UUID.randomUUID(), new Coordinate(100, 0),
@@ -114,8 +111,7 @@ class FlowAggregatorTest {
 
         aggregator.aggregate(tree, Map.of("oks-1", 5.0, "oks-2", 7.0, "oks-3", 11.0));
 
-        // корень: 5+7+11 = 23
-        assertThat(rootToB1.getFlowTph()).isEqualTo(18.0);   // ветка к b1: 7+11
+        assertThat(rootToB1.getFlowTph()).isEqualTo(18.0);
         assertThat(rootToLeaf1.getFlowTph()).isEqualTo(5.0);
         assertThat(b1ToB2.getFlowTph()).isEqualTo(11.0);
         assertThat(b1ToLeaf2.getFlowTph()).isEqualTo(7.0);

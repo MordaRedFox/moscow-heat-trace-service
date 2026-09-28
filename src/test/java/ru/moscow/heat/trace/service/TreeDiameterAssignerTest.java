@@ -8,18 +8,29 @@ import ru.moscow.heat.trace.model.RouteTree;
 import ru.moscow.heat.trace.model.TreeEdge;
 import ru.moscow.heat.trace.model.TreeNode;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Unit-тесты {@link TreeDiameterAssigner} (итерация 6, шаг 4).
+ *
+ * <p>Проверяются:
+ * <ul>
+ *   <li>подбор ДУ по расходу ребра;</li>
+ *   <li>инвариант монотонности: ДУ не убывает от листа к корню;</li>
+ *   <li>каскадное повышение ДУ ствола при повышении ДУ ветви;</li>
+ *   <li>предельная длина: длинный путь повышает ДУ участка;</li>
+ *   <li>общий участок учитывается в каждом пути лист→корень.</li>
+ * </ul>
+ */
 class TreeDiameterAssignerTest {
 
     private final DiameterTable table = new DiameterTable();
     private final TreeDiameterAssigner assigner = new TreeDiameterAssigner(table);
 
-    // ---------- хелперы построения дерева ----------
+    // ---------- хелперы ----------
 
     private TreeNode node(double x, double y,
                           TreeNode.TreeNodeType type, String oksFeatureId) {
@@ -70,8 +81,8 @@ class TreeDiameterAssignerTest {
         TreeEdge b1 = edge(branch, leaf1);
         TreeEdge b2 = edge(branch, leaf2);
 
-        trunk.setFlowTph(60.0); // 150: 65.1>=60
-        b1.setFlowTph(30.0);    // 125: 40.2>=30
+        trunk.setFlowTph(60.0); // 150: 65.1 >= 60
+        b1.setFlowTph(30.0);    // 125: 40.2 >= 30
         b2.setFlowTph(30.0);
 
         RouteTree tree = tree(root, List.of(root, branch, leaf1, leaf2),
@@ -100,14 +111,54 @@ class TreeDiameterAssignerTest {
         assigner.assign(tree);
 
         // от листа к корню: ДУ ветви <= ДУ ствола
-        assertThat(trunk.getDiameterMm()).isGreaterThanOrEqualTo(branch.getDiameterMm());
+        assertThat(trunk.getDiameterMm())
+                .isGreaterThanOrEqualTo(branch.getDiameterMm());
+    }
+
+    @Test
+    @DisplayName("Каскадная монотонность: повышение ДУ в ветви поднимает ДУ ствола")
+    void cascadeMonotonicity_branchRaisesTrunk() {
+        // Ствол 100 м, две ветви по 200 м каждая.
+        // Малый расход → ДУ 50 не проходит по предельной длине ветви (181 м).
+        // Ветвь поднимается до 65 (предел 245 м).
+        // Ствол обязан стать не меньше ветвей по инварианту монотонности.
+        TreeNode root = node(0, 0, TreeNode.TreeNodeType.ROOT, null);
+        TreeNode branch = node(100, 0, TreeNode.TreeNodeType.BRANCH, null);
+        TreeNode leaf1 = node(100, 200, TreeNode.TreeNodeType.LEAF, "oks-1");
+        TreeNode leaf2 = node(100, -200, TreeNode.TreeNodeType.LEAF, "oks-2");
+
+        TreeEdge trunk = edge(root, branch);
+        TreeEdge b1 = edge(branch, leaf1);
+        TreeEdge b2 = edge(branch, leaf2);
+
+        trunk.setFlowTph(4.0);  // → ДУ 65 по расходу
+        b1.setFlowTph(2.0);     // → ДУ 50 по расходу, но 200 м > 181 → 65
+        b2.setFlowTph(2.0);
+
+        // Форсируем ДУ 50, чтобы тест проверял именно каскад
+        trunk.setDiameterMm(50);
+        b1.setDiameterMm(50);
+        b2.setDiameterMm(50);
+
+        RouteTree tree = tree(root, List.of(root, branch, leaf1, leaf2),
+                List.of(trunk, b1, b2), List.of(leaf1, leaf2), List.of(branch));
+        assigner.assign(tree);
+
+        // Ветви длиной 200 м не проходят по ДУ 50 (предел 181) → поднимаются.
+        assertThat(b1.getDiameterMm()).isGreaterThanOrEqualTo(65);
+        assertThat(b2.getDiameterMm()).isGreaterThanOrEqualTo(65);
+        // Ствол не меньше ветвей.
+        assertThat(trunk.getDiameterMm())
+                .isGreaterThanOrEqualTo(b1.getDiameterMm());
+        assertThat(trunk.getDiameterMm())
+                .isGreaterThanOrEqualTo(b2.getDiameterMm());
     }
 
     @Test
     @DisplayName("Предельная длина: длинный путь повышает ДУ участка")
     void longPath_raisesDiameter() {
         // ДУ 50: предел 181 м. Путь 200 м с малым расходом 2 т/ч.
-        // Минимальный по расходу ДУ=50 не проходит по длине -> повышаем.
+        // Минимальный по расходу ДУ=50 не проходит по длине → повышаем.
         TreeNode root = node(0, 0, TreeNode.TreeNodeType.ROOT, null);
         TreeNode leaf = node(200, 0, TreeNode.TreeNodeType.LEAF, "oks-1");
         TreeEdge only = edge(root, leaf); // длина 200 м
@@ -118,7 +169,6 @@ class TreeDiameterAssignerTest {
         assigner.assign(tree);
 
         // ДУ должен быть таким, что maxLen >= 200 и capacity >= 2
-        // ДУ 50 (181) не проходит; ДУ 65 (245) проходит
         assertThat(only.getDiameterMm()).isGreaterThan(50);
         assertThat(table.findByDiameter(only.getDiameterMm()).orElseThrow()
                 .getMaxLengthM()).isGreaterThanOrEqualTo(200.0);
@@ -127,27 +177,23 @@ class TreeDiameterAssignerTest {
     @Test
     @DisplayName("Общий участок учитывается в каждом пути")
     void sharedSegment_accountedInEveryPath() {
-        // Ствол 150 м (ДУ по расходу 50 = 100), две ветви по 60 м.
-        // Путь каждого ОКС: 150 (ствол) + 60 (ветвь).
+        // Ствол 150 м, две ветви по 60 м. Путь каждого ОКС: 150 + 60.
         TreeNode root = node(0, 0, TreeNode.TreeNodeType.ROOT, null);
         TreeNode branch = node(150, 0, TreeNode.TreeNodeType.BRANCH, null);
         TreeNode leaf1 = node(150, 60, TreeNode.TreeNodeType.LEAF, "oks-1");
         TreeNode leaf2 = node(150, -60, TreeNode.TreeNodeType.LEAF, "oks-2");
 
-        TreeEdge trunk = edge(root, branch);   // 150 м
-        TreeEdge b1 = edge(branch, leaf1);     // 60 м
-        TreeEdge b2 = edge(branch, leaf2);     // 60 м
-        trunk.setFlowTph(6.0);  // ДУ 65 (8.3>=6), предел 245
-        b1.setFlowTph(3.0);     // ДУ 50 (3.5>=3), предел 181
+        TreeEdge trunk = edge(root, branch);
+        TreeEdge b1 = edge(branch, leaf1);
+        TreeEdge b2 = edge(branch, leaf2);
+        trunk.setFlowTph(6.0);  // ДУ 65 (8.3 >= 6), предел 245
+        b1.setFlowTph(3.0);     // ДУ 50 (3.5 >= 3), предел 181
         b2.setFlowTph(3.0);
 
         RouteTree tree = tree(root, List.of(root, branch, leaf1, leaf2),
                 List.of(trunk, b1, b2), List.of(leaf1, leaf2), List.of(branch));
         assigner.assign(tree);
 
-        // Участок ДУ ствола (65) длиной 150 м <= 245 -> ок.
-        // Участок ДУ ветви (50) длиной 60 м <= 181 -> ок.
-        // Если бы ствол+ветвь имели один ДУ, длина 210 м проверялась бы совместно.
         assertThat(trunk.getDiameterMm()).isEqualTo(65);
         assertThat(b1.getDiameterMm()).isEqualTo(50);
         assertThat(b2.getDiameterMm()).isEqualTo(50);
