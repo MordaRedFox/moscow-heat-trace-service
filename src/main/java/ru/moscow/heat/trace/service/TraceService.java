@@ -1,13 +1,22 @@
-package ru.moscow.heat.trace.service;
+﻿package ru.moscow.heat.trace.service;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
 import ru.moscow.heat.geojson.repository.UploadSessionRepository;
-import ru.moscow.heat.trace.dto.*;
+import ru.moscow.heat.trace.dto.TieInCandidate;
+import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
+import ru.moscow.heat.trace.dto.TraceResult as TraceDtoResult;
+import ru.moscow.heat.trace.dto.TraceStatus;
+import ru.moscow.heat.trace.dto.TraceStatusResponse;
+import ru.moscow.heat.trace.dto.VariantResult;
+import ru.moscow.heat.trace.dto.VariantSummary;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
 import ru.moscow.heat.trace.exception.VariantNotFoundException;
+import ru.moscow.heat.trace.model.TraceResult;
+import ru.moscow.heat.trace.model.UnconnectedOks;
 
 import java.time.Instant;
 import java.util.*;
@@ -15,8 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * Сервис управления сессиями и моделированием трассировки.
- * Выполняет расчет вариантов трассировки, их ранжирование и потоковый экспорт.
+ * Сервис управления сессиями моделирования трасс тепловых сетей.
  */
 @Slf4j
 @Service
@@ -28,149 +36,165 @@ public class TraceService {
     private final TraceGeoJsonExporter traceGeoJsonExporter;
 
     private final Map<UUID, TraceStatusResponse> sessions = new ConcurrentHashMap<>();
-    private final Map<UUID, UUID> traceUploads = new ConcurrentHashMap<>();
-    private final Map<UUID, List<TieInCandidate>> candidateCache = new ConcurrentHashMap<>();
+    private final Map<UUID, UUID> traceToUpload = new ConcurrentHashMap<>();
     private final Map<UUID, TraceResult> traceResults = new ConcurrentHashMap<>();
+    private final Map<UUID, ru.moscow.heat.trace.dto.TraceResult> variantResults = new ConcurrentHashMap<>();
 
+    @Autowired
     public TraceService(
             UploadSessionRepository uploadSessionRepository,
             TieInCandidateService tieInCandidateService,
-            VariantGenerator variantGenerator,
-            TraceGeoJsonExporter traceGeoJsonExporter) {
-        this.uploadSessionRepository = Objects.requireNonNull(
-                uploadSessionRepository, "UploadSessionRepository must not be null");
-        this.tieInCandidateService = Objects.requireNonNull(
-                tieInCandidateService, "TieInCandidateService must not be null");
-        this.variantGenerator = Objects.requireNonNull(
-                variantGenerator, "VariantGenerator must not be null");
-        this.traceGeoJsonExporter = Objects.requireNonNull(
-                traceGeoJsonExporter, "TraceGeoJsonExporter must not be null");
+            @Autowired(required = false) VariantGenerator variantGenerator,
+            @Autowired(required = false) TraceGeoJsonExporter traceGeoJsonExporter) {
+        this.uploadSessionRepository = uploadSessionRepository;
+        this.tieInCandidateService = tieInCandidateService;
+        this.variantGenerator = variantGenerator;
+        this.traceGeoJsonExporter = traceGeoJsonExporter;
+    }
+
+    public TraceService(
+            UploadSessionRepository uploadSessionRepository,
+            TieInCandidateService tieInCandidateService) {
+        this(uploadSessionRepository, tieInCandidateService, null, null);
     }
 
     /**
-     * Создает новую сессию трассировки для существующей загрузки uploadId
-     * и выполняет расчет кандидатов на присоединение и вариантов трассы.
+     * Создает новую сессию трассировки в статусе {@link TraceStatus#PENDING}.
      *
-     * @param uploadId идентификатор загруженного набора данных
-     * @return TraceAcceptedResponse со сгенерированным traceId и statusUrl
-     * @throws UploadNotFoundException если uploadId не найден в базе данных
+     * @param uploadId идентификатор сессии загрузки
+     * @return ответ о принятии задачи
+     * @throws UploadNotFoundException если сессия загрузки не найдена
      */
     public TraceAcceptedResponse createTraceSession(UUID uploadId) {
-        if (uploadId == null || !uploadSessionRepository.existsById(uploadId)) {
-            throw new UploadNotFoundException(
-                    "Сессия загрузки с id=" + uploadId + " не найдена");
+        if (!uploadSessionRepository.existsById(uploadId)) {
+            throw new UploadNotFoundException(uploadId);
         }
 
         UUID traceId = UUID.randomUUID();
-        TraceStatusResponse session = new TraceStatusResponse(
-                traceId,
-                TraceStatus.COMPLETED,
-                Instant.now()
-        );
-        sessions.put(traceId, session);
-        traceUploads.put(traceId, uploadId);
+        TraceStatusResponse initialStatus = TraceStatusResponse.builder()
+                .traceId(traceId)
+                .status(TraceStatus.PENDING)
+                .createdAt(Instant.now())
+                .totalOksCount(0)
+                .connectedCount(0)
+                .unconnectedCount(0)
+                .unconnectedOksFeatureIds(Collections.emptyList())
+                .build();
 
-        Map<String, List<TieInCandidate>> candidatesByPoint =
-                tieInCandidateService.findCandidatesForAllPoints(uploadId);
-        List<TieInCandidate> allCandidates = candidatesByPoint.values().stream()
-                .flatMap(List::stream)
-                .collect(Collectors.toList());
-        candidateCache.put(traceId, allCandidates);
+        sessions.put(traceId, initialStatus);
+        traceToUpload.put(traceId, uploadId);
 
-        TraceResult traceResult = variantGenerator.generateTraceResult(uploadId, traceId);
-        traceResults.put(traceId, traceResult);
-
-        log.info("Сессия трассировки [{}] для загрузки [{}]: сформировано {} вариантов трассы",
-                traceId, uploadId, traceResult.getVariants().size());
-
+        log.info("Создана сессия трассировки [{}] для загрузки [{}]", traceId, uploadId);
         return new TraceAcceptedResponse(traceId, "/api/trace/" + traceId);
     }
 
     /**
-     * Получает текущий статус сессии трассировки по traceId
+     * Возвращает текущий статус задачи моделирования трасс.
      *
      * @param traceId идентификатор задачи трассировки
-     * @return TraceStatusResponse
-     * @throws TraceNotFoundException если задача с таким traceId отсутствует
+     * @return статус задачи
+     * @throws TraceNotFoundException если задача не найдена
      */
     public TraceStatusResponse getTraceStatus(UUID traceId) {
-        TraceStatusResponse response = sessions.get(traceId);
-        if (response == null) {
+        TraceStatusResponse status = sessions.get(traceId);
+        if (status == null) {
             throw new TraceNotFoundException(traceId);
         }
-        return response;
+        return status;
     }
 
-    /**
-     * Получает список кандидатов на присоединение для задачи трассировки
-     *
-     * @param traceId идентификатор задачи трассировки
-     * @return список кандидатов на присоединение
-     * @throws TraceNotFoundException если задача с таким traceId отсутствует
-     */
-    public List<TieInCandidate> getCandidates(UUID traceId) {
-        if (!sessions.containsKey(traceId)) {
-            throw new TraceNotFoundException(traceId);
-        }
-        List<TieInCandidate> cached = candidateCache.get(traceId);
-        if (cached != null) {
-            return cached;
-        }
-        UUID uploadId = traceUploads.get(traceId);
-        if (uploadId == null) {
-            return Collections.emptyList();
-        }
-        Map<String, List<TieInCandidate>> candidatesByPoint =
-                tieInCandidateService.findCandidatesForAllPoints(uploadId);
-        List<TieInCandidate> allCandidates = candidatesByPoint.values().stream()
-                .flatMap(List::stream)
+    public void markProcessing(UUID traceId) {
+        update(traceId, current -> current.toBuilder()
+                .status(TraceStatus.PROCESSING)
+                .startedAt(Instant.now())
+                .build());
+    }
+
+    public void markCompleted(UUID traceId, TraceResult result) {
+        traceResults.put(traceId, result);
+        List<String> unconnectedIds = result.getUnconnectedOks().stream()
+                .map(UnconnectedOks::getOksPointFeatureId)
                 .collect(Collectors.toList());
-        candidateCache.put(traceId, allCandidates);
-        return allCandidates;
+
+        update(traceId, current -> current.toBuilder()
+                .status(TraceStatus.COMPLETED)
+                .completedAt(Instant.now())
+                .totalOksCount(result.getSummaryCounters().getTotalOksCount())
+                .connectedCount(result.getSummaryCounters().getConnectedCount())
+                .unconnectedCount(result.getSummaryCounters().getUnconnectedCount())
+                .unconnectedOksFeatureIds(unconnectedIds)
+                .build());
     }
 
-    /**
-     * Получает полный результат трассировки по traceId
-     *
-     * @param traceId идентификатор задачи трассировки
-     * @return результат трассировки
-     * @throws TraceNotFoundException если задача отсутствует
-     */
+    public void markFailed(UUID traceId, String errorMessage) {
+        update(traceId, current -> current.toBuilder()
+                .status(TraceStatus.FAILED)
+                .completedAt(Instant.now())
+                .errorMessage(errorMessage)
+                .build());
+    }
+
     public TraceResult getTraceResult(UUID traceId) {
         if (!sessions.containsKey(traceId)) {
             throw new TraceNotFoundException(traceId);
         }
-        TraceResult result = traceResults.get(traceId);
-        if (result == null) {
-            UUID uploadId = traceUploads.get(traceId);
+        return traceResults.get(traceId);
+    }
+
+    public List<TieInCandidate> getCandidates(UUID traceId) {
+        UUID uploadId = traceToUpload.get(traceId);
+        if (uploadId == null) {
+            throw new TraceNotFoundException(traceId);
+        }
+        Map<String, List<TieInCandidate>> byPoint =
+                tieInCandidateService.findCandidatesForAllPoints(uploadId);
+        List<TieInCandidate> flat = new ArrayList<>();
+        for (List<TieInCandidate> list : byPoint.values()) {
+            flat.addAll(list);
+        }
+        return flat;
+    }
+
+    /**
+     * Получает результат трассировки с вариантами (Итерация 7)
+     */
+    public ru.moscow.heat.trace.dto.TraceResult getVariantsTraceResult(UUID traceId) {
+        if (!sessions.containsKey(traceId)) {
+            throw new TraceNotFoundException(traceId);
+        }
+        ru.moscow.heat.trace.dto.TraceResult result = variantResults.get(traceId);
+        if (result == null && variantGenerator != null) {
+            UUID uploadId = traceToUpload.get(traceId);
             result = variantGenerator.generateTraceResult(uploadId, traceId);
-            traceResults.put(traceId, result);
+            variantResults.put(traceId, result);
         }
         return result;
     }
 
     /**
      * Получает список ранжированных сводок вариантов трассировки
-     *
-     * @param traceId идентификатор задачи трассировки
-     * @return список сводок вариантов
      */
     public List<VariantSummary> getVariants(UUID traceId) {
-        TraceResult result = getTraceResult(traceId);
+        ru.moscow.heat.trace.dto.TraceResult result = getVariantsTraceResult(traceId);
+        if (result == null || result.getVariants() == null) {
+            return Collections.emptyList();
+        }
         return result.getVariants().stream()
                 .map(VariantResult::getSummary)
                 .collect(Collectors.toList());
     }
 
     /**
-     * Выполняет экспорт одного или всех вариантов трассировки в виде потокового ответа StreamingResponseBody
-     *
-     * @param traceId   идентификатор задачи трассировки
-     * @param variantId идентификатор конкретного варианта (опционально)
-     * @return StreamingResponseBody с GeoJSON
+     * Выполняет потоковый экспорт одного или всех вариантов в GeoJSON
      */
     public StreamingResponseBody exportTrace(UUID traceId, String variantId) {
-        TraceResult result = getTraceResult(traceId);
+        ru.moscow.heat.trace.dto.TraceResult result = getVariantsTraceResult(traceId);
+        if (result == null) {
+            throw new TraceNotFoundException(traceId);
+        }
+        if (traceGeoJsonExporter == null) {
+            return outputStream -> {};
+        }
         if (variantId != null && !variantId.isBlank()) {
             VariantResult variant = result.getVariants().stream()
                     .filter(v -> variantId.equalsIgnoreCase(v.getVariantId()))
@@ -180,5 +204,15 @@ public class TraceService {
             return traceGeoJsonExporter.exportVariantStreaming(variant);
         }
         return traceGeoJsonExporter.exportAllVariantsStreaming(result);
+    }
+
+    private void update(UUID traceId, java.util.function.UnaryOperator<TraceStatusResponse> mutator) {
+        TraceStatusResponse updated = sessions.compute(traceId, (id, current) -> {
+            if (current == null) {
+                throw new TraceNotFoundException(traceId);
+            }
+            return mutator.apply(current);
+        });
+        assert updated != null;
     }
 }

@@ -1,72 +1,134 @@
-package ru.moscow.heat.trace.model;
+﻿package ru.moscow.heat.trace.model;
 
 import lombok.EqualsAndHashCode;
-import lombok.Getter;
 import lombok.ToString;
 import org.locationtech.jts.geom.LineString;
 
 import java.math.BigDecimal;
+import java.util.Objects;
+import java.util.UUID;
 
 /**
- * Неизменяемый участок трассируемой тепловой сети (сегмент).
- * Хранит геометрию, диаметр, расчетные коэффициенты и расчетную стоимость.
+ * Отрезок маршрута новой тепловой сети между двумя узлами.
  */
-@Getter
 @ToString
 @EqualsAndHashCode
 public final class RouteSegment {
 
-    private final String id;
+    private final UUID id;
+    private final String stringId;
     private final RouteNode fromNode;
     private final RouteNode toNode;
-    private final LineString geometry;
-    private final double lengthM;
+    private final LineString geometryUtm;
+    private final BigDecimal flowTph;
     private final int diameterMm;
-    private final double flowTph;
+    private final LayingMethod layingMethod;
     private final double kspets;
-    private final double kgl;
+    private final double lengthM;
     private final BigDecimal cost;
 
-    public RouteSegment(String id,
-                        RouteNode fromNode,
-                        RouteNode toNode,
-                        LineString geometry,
-                        double lengthM,
-                        int diameterMm,
-                        double flowTph,
-                        double kspets,
-                        double kgl,
-                        BigDecimal cost) {
-        this.id = id;
-        this.fromNode = fromNode;
-        this.toNode = toNode;
-        this.geometry = geometry;
-        this.lengthM = lengthM;
+    public RouteSegment(UUID id, RouteNode fromNode, RouteNode toNode, LineString geometryUtm,
+                        BigDecimal flowTph, int diameterMm, LayingMethod layingMethod,
+                        double kspets, double lengthM, BigDecimal cost) {
+        this.id = Objects.requireNonNull(id, "id");
+        this.stringId = id.toString();
+        this.fromNode = Objects.requireNonNull(fromNode, "fromNode");
+        this.toNode = Objects.requireNonNull(toNode, "toNode");
+        this.geometryUtm = Objects.requireNonNull(geometryUtm, "geometryUtm");
+        this.flowTph = Objects.requireNonNull(flowTph, "flowTph");
         this.diameterMm = diameterMm;
-        this.flowTph = flowTph;
-        this.kspets = kspets > 0 ? kspets : 1.0;
-        this.kgl = kgl > 0 ? kgl : 1.0;
+        this.layingMethod = Objects.requireNonNull(layingMethod, "layingMethod");
+        this.kspets = kspets;
+        this.lengthM = lengthM;
         this.cost = cost;
     }
 
-    /**
-     * Фабричный метод создания копии сегмента с установленной стоимостью.
-     *
-     * @param newCost расчетная стоимость сегмента
-     * @return новый неизменяемый экземпляр RouteSegment
-     */
+    public RouteSegment(String id, RouteNode fromNode, RouteNode toNode, LineString geometry,
+                        double lengthM, int diameterMm, double flowTph, double kspets, double kgl,
+                        BigDecimal cost) {
+        UUID parsed;
+        try {
+            parsed = id != null ? UUID.fromString(id) : UUID.randomUUID();
+        } catch (Exception e) {
+            parsed = id != null ? UUID.nameUUIDFromBytes(id.getBytes(java.nio.charset.StandardCharsets.UTF_8)) : UUID.randomUUID();
+        }
+        this.id = parsed;
+        this.stringId = id;
+        this.fromNode = Objects.requireNonNull(fromNode, "fromNode");
+        this.toNode = Objects.requireNonNull(toNode, "toNode");
+        this.geometryUtm = Objects.requireNonNull(geometry, "geometry");
+        this.flowTph = BigDecimal.valueOf(flowTph);
+        this.diameterMm = diameterMm;
+        this.layingMethod = kspets > 1.0 ? LayingMethod.SPECIAL : LayingMethod.BASE;
+        this.kspets = kspets > 0 ? kspets : 1.0;
+        this.lengthM = lengthM;
+        this.cost = cost;
+    }
+
     public RouteSegment withCost(BigDecimal newCost) {
         return new RouteSegment(
                 this.id,
                 this.fromNode,
                 this.toNode,
-                this.geometry,
-                this.lengthM,
-                this.diameterMm,
+                this.geometryUtm,
                 this.flowTph,
+                this.diameterMm,
+                this.layingMethod,
                 this.kspets,
-                this.kgl,
+                this.lengthM,
                 newCost
         );
+    }
+
+    public UUID getId() {
+        return id;
+    }
+
+    public String getStringId() {
+        return stringId;
+    }
+
+    public RouteNode getFromNode() {
+        return fromNode;
+    }
+
+    public RouteNode getToNode() {
+        return toNode;
+    }
+
+    public LineString getGeometryUtm() {
+        return geometryUtm;
+    }
+
+    public LineString getGeometry() {
+        return geometryUtm;
+    }
+
+    public BigDecimal getFlowTph() {
+        return flowTph;
+    }
+
+    public double getFlowTphDouble() {
+        return flowTph != null ? flowTph.doubleValue() : 0.0;
+    }
+
+    public int getDiameterMm() {
+        return diameterMm;
+    }
+
+    public LayingMethod getLayingMethod() {
+        return layingMethod;
+    }
+
+    public double getKspets() {
+        return kspets;
+    }
+
+    public double getLengthM() {
+        return lengthM;
+    }
+
+    public BigDecimal getCost() {
+        return cost;
     }
 }

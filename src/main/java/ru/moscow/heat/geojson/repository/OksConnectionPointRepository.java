@@ -13,7 +13,6 @@ public interface OksConnectionPointRepository
 
     /**
      * Поиск точки подключения по идентификатору загрузки и feature_id
-     *
      * @param uploadId  идентификатор сессии загрузки
      * @param featureId идентификатор объекта внутри GeoJSON
      * @return Optional с сущностью точки подключения
