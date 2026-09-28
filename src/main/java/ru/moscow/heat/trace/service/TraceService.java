@@ -33,6 +33,7 @@ public class TraceService {
     private final TieInCandidateService tieInCandidateService;
     private final VariantGenerator variantGenerator;
     private final TraceGeoJsonExporter traceGeoJsonExporter;
+    private final TraceResultMapper traceResultMapper;
 
     private final Map<UUID, TraceStatusResponse> sessions = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> traceToUpload = new ConcurrentHashMap<>();
@@ -44,17 +45,27 @@ public class TraceService {
             UploadSessionRepository uploadSessionRepository,
             TieInCandidateService tieInCandidateService,
             @Autowired(required = false) VariantGenerator variantGenerator,
-            @Autowired(required = false) TraceGeoJsonExporter traceGeoJsonExporter) {
+            @Autowired(required = false) TraceGeoJsonExporter traceGeoJsonExporter,
+            @Autowired(required = false) TraceResultMapper traceResultMapper) {
         this.uploadSessionRepository = uploadSessionRepository;
         this.tieInCandidateService = tieInCandidateService;
         this.variantGenerator = variantGenerator;
         this.traceGeoJsonExporter = traceGeoJsonExporter;
+        this.traceResultMapper = traceResultMapper;
+    }
+
+    public TraceService(
+            UploadSessionRepository uploadSessionRepository,
+            TieInCandidateService tieInCandidateService,
+            VariantGenerator variantGenerator,
+            TraceGeoJsonExporter traceGeoJsonExporter) {
+        this(uploadSessionRepository, tieInCandidateService, variantGenerator, traceGeoJsonExporter, null);
     }
 
     public TraceService(
             UploadSessionRepository uploadSessionRepository,
             TieInCandidateService tieInCandidateService) {
-        this(uploadSessionRepository, tieInCandidateService, null, null);
+        this(uploadSessionRepository, tieInCandidateService, null, null, null);
     }
 
     /**
@@ -165,10 +176,16 @@ public class TraceService {
             throw new TraceNotFoundException(traceId);
         }
         ru.moscow.heat.trace.dto.TraceResult result = variantResults.get(traceId);
-        if (result == null && variantGenerator != null) {
+        if (result == null) {
             UUID uploadId = traceToUpload.get(traceId);
-            result = variantGenerator.generateTraceResult(uploadId, traceId);
-            variantResults.put(traceId, result);
+            ru.moscow.heat.trace.model.TraceResult orchResult = traceResults.get(traceId);
+            if (orchResult != null && traceResultMapper != null) {
+                result = traceResultMapper.toTraceResult(uploadId, traceId, orchResult);
+                variantResults.put(traceId, result);
+            } else if (variantGenerator != null) {
+                result = variantGenerator.generateTraceResult(uploadId, traceId);
+                variantResults.put(traceId, result);
+            }
         }
         return result;
     }
