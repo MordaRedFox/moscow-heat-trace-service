@@ -371,7 +371,8 @@ public final class VisibilityGraph {
     private boolean isVisible(double ax, double ay, double bx, double by,
                                Set<Long> ignoredForbiddenIds) {
         LineString segment = shrunkSegment(ax, ay, bx, by);
-        Envelope env = segment.getEnvelopeInternal();
+        LineString rawSeg = rawSegment(ax, ay, bx, by);
+        Envelope env = rawSeg.getEnvelopeInternal();
         for (ObstacleModel.ForbiddenZone zone : obstacleModel.findForbiddenNear(env)) {
             Long id = zone.getSourceRestrictionId();
             if (id != null && ignoredForbiddenIds.contains(id)) {
@@ -380,6 +381,17 @@ public final class VisibilityGraph {
             if (!env.intersects(zone.getEnvelope())) {
                 continue;
             }
+            // 1. Физическое тело здания / препятствия: пересечение категорически запрещено
+            if (zone.getPreparedSourceGeometry() != null) {
+                if (zone.getPreparedSourceGeometry().intersects(rawSeg)) {
+                    return false;
+                }
+            } else if (zone.getSourceGeometryUtm() != null) {
+                if (zone.getSourceGeometryUtm().intersects(rawSeg)) {
+                    return false;
+                }
+            }
+            // 2. Буферная зона: транзитное пересечение запрещено
             if (zone.getPreparedGeometry().crosses(segment)) {
                 return false;
             }

@@ -36,8 +36,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class ObstacleModelBuilder {
 
-    /** Максимальный ДУ справочника для единого отступа от ОКС */
-    private static final int MAX_DIAMETER_MM = 1400;
+    /** Базовый ДУ для расчета минимального отступа от ОКС (5 м для ДУ < 500 мм по п. 3 разъяснений ТП) */
+    private static final int BASE_DIAMETER_MM = 400;
 
     /**
      * Допуск упрощения буферов (метры). 1 м - безопасный компромисс:
@@ -73,7 +73,7 @@ public class ObstacleModelBuilder {
             RestrictionRule rule = ruleOpt.get();
 
             double clearanceM = isOks(restriction.getRestrictionType())
-                    ? ruleRegistry.minDistanceForDiameter(MAX_DIAMETER_MM)
+                    ? ruleRegistry.minDistanceForDiameter(BASE_DIAMETER_MM)
                     : rule.getMinHorizontalDistanceM();
 
             Geometry sourceGeom = restriction.getGeometryUtm();
@@ -83,7 +83,7 @@ public class ObstacleModelBuilder {
 
             if (rule.getRuleType() == RestrictionRuleType.FORBIDDEN) {
                 forbidden.add(new ObstacleModel.ForbiddenZone(
-                        restriction.getId(), bufferedUtm));
+                        restriction.getId(), bufferedUtm, sourceGeom));
             } else {
                 double kspets = rule.getKspets() != null ? rule.getKspets() : 1.0;
                 special.add(new ObstacleModel.SpecialZone(

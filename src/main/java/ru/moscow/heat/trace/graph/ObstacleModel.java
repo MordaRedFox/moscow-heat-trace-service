@@ -27,16 +27,27 @@ public final class ObstacleModel {
     public static final class ForbiddenZone {
         private final Long sourceRestrictionId;
         private final Geometry bufferedGeometryUtm;
+        private final Geometry sourceGeometryUtm;
         private final Envelope envelope;
         private final PreparedGeometry preparedGeometry;
+        private final PreparedGeometry preparedSourceGeometry;
 
         public ForbiddenZone(Long sourceRestrictionId, Geometry bufferedGeometryUtm) {
+            this(sourceRestrictionId, bufferedGeometryUtm, null);
+        }
+
+        public ForbiddenZone(Long sourceRestrictionId, Geometry bufferedGeometryUtm,
+                             Geometry sourceGeometryUtm) {
             this.sourceRestrictionId = sourceRestrictionId;
             this.bufferedGeometryUtm = Objects.requireNonNull(
                     bufferedGeometryUtm, "bufferedGeometryUtm");
+            this.sourceGeometryUtm = sourceGeometryUtm;
             this.envelope = bufferedGeometryUtm.getEnvelopeInternal();
             this.preparedGeometry = PreparedGeometryFactory
                     .prepare(bufferedGeometryUtm);
+            this.preparedSourceGeometry = sourceGeometryUtm != null
+                    ? PreparedGeometryFactory.prepare(sourceGeometryUtm)
+                    : null;
         }
 
         public Long getSourceRestrictionId() {
@@ -47,12 +58,20 @@ public final class ObstacleModel {
             return bufferedGeometryUtm;
         }
 
+        public Geometry getSourceGeometryUtm() {
+            return sourceGeometryUtm;
+        }
+
         public Envelope getEnvelope() {
             return envelope;
         }
 
         public PreparedGeometry getPreparedGeometry() {
             return preparedGeometry;
+        }
+
+        public PreparedGeometry getPreparedSourceGeometry() {
+            return preparedSourceGeometry;
         }
     }
 
