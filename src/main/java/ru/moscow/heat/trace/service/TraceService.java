@@ -125,6 +125,12 @@ public class TraceService {
 
     public void markCompleted(UUID traceId, TraceResult result) {
         traceResults.put(traceId, result);
+        if (traceResultMapper != null) {
+            UUID uploadId = traceToUpload.get(traceId);
+            if (uploadId != null) {
+                variantResults.put(traceId, traceResultMapper.toTraceResult(uploadId, traceId, result));
+            }
+        }
         List<String> unconnectedIds = result.getUnconnectedOks().stream()
                 .map(UnconnectedOks::getOksPointFeatureId)
                 .collect(Collectors.toList());

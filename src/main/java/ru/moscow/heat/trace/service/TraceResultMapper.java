@@ -24,15 +24,35 @@ import java.util.UUID;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class TraceResultMapper {
 
     private final CostCalculator costCalculator;
     private final ChamberCostCalculator chamberCostCalculator;
     private final VariantScoreCalculator variantScoreCalculator;
+    private final VariantGenerator variantGenerator;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public TraceResultMapper(
+            CostCalculator costCalculator,
+            ChamberCostCalculator chamberCostCalculator,
+            VariantScoreCalculator variantScoreCalculator,
+            @org.springframework.beans.factory.annotation.Autowired(required = false) VariantGenerator variantGenerator) {
+        this.costCalculator = costCalculator;
+        this.chamberCostCalculator = chamberCostCalculator;
+        this.variantScoreCalculator = variantScoreCalculator;
+        this.variantGenerator = variantGenerator;
+    }
+
+    public TraceResultMapper(
+            CostCalculator costCalculator,
+            ChamberCostCalculator chamberCostCalculator,
+            VariantScoreCalculator variantScoreCalculator) {
+        this(costCalculator, chamberCostCalculator, variantScoreCalculator, null);
+    }
 
     /**
-     * Преобразует внутренний TraceResult в DTO TraceResult со сформированным вариантом v1.
+     * Преобразует внутренний TraceResult в DTO TraceResult со сформированным вариантом v1
+     * и дополнительными вариантами v2, v3 из VariantGenerator.
      *
      * @param uploadId   идентификатор загрузки
      * @param traceId    идентификатор трассировки
@@ -98,14 +118,34 @@ public class TraceResultMapper {
             }
         }
 
-        // 5. Расчет сводки и скоринга варианта
+        // 5. Расчет сводки и скоринга основного варианта v1 (A* с обходом препятствий)
         VariantSummary summary = variantScoreCalculator.calculateSummary(
                 "v1", costedSegments, costedChambers, tieIns, unconnected);
 
         VariantResult variant = new VariantResult(
-                "v1", costedSegments, costedChambers, tieIns, unconnected, summary);
+                "v1", costedSegments, costedChambers, tieIns, unconnected, summary.withRank(1));
+
+        List<VariantResult> allVariants = new ArrayList<>();
+        allVariants.add(variant);
+
+        // 6. Подмешиваем альтернативные варианты v2 и v3 по п. 2.8 ТЗ (не менее 3 вариантов)
+        if (variantGenerator != null && uploadId != null) {
+            try {
+                ru.moscow.heat.trace.dto.TraceResult generated = variantGenerator.generateTraceResult(uploadId, traceId);
+                if (generated != null && generated.getVariants() != null) {
+                    int nextRank = 2;
+                    for (VariantResult genVar : generated.getVariants()) {
+                        if (!"v1".equals(genVar.getVariantId())) {
+                            allVariants.add(genVar.withRank(nextRank++));
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("Не удалось сгенерировать дополнительные варианты для [{}]: {}", traceId, e.getMessage());
+            }
+        }
 
         return new ru.moscow.heat.trace.dto.TraceResult(
-                traceId, uploadId, List.of(variant), unconnected);
+                traceId, uploadId, allVariants, unconnected);
     }
 }
