@@ -8,6 +8,8 @@ import org.locationtech.jts.geom.LineString;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.linearref.LengthIndexedLine;
 import org.springframework.stereotype.Service;
+import ru.moscow.heat.trace.dto.TieInCandidate;
+import ru.moscow.heat.trace.dto.TieInType;
 import ru.moscow.heat.trace.graph.ObstacleModel;
 import ru.moscow.heat.trace.model.LayingMethod;
 import ru.moscow.heat.trace.model.NewChamber;
@@ -34,12 +36,17 @@ import java.util.UUID;
  * Адаптация {@link RouteSegmentSplitter} под дерево:
  * <ul>
  *   <li>каждое {@link TreeEdge} обрабатывается как отдельная полилиния;</li>
- *   <li>узлы дерева ({@link TreeNode}) маппятся на общие {@link RouteNode},
- *       обеспечивая топологию: {@code end_node_id} одного сегмента =
+ *   <li>узлы дерева ({@link TreeNode}) маппятся на общие {@link RouteNode}
+ *       через кэш по {@code TreeNode.id} — обеспечивается топология:
+ *       {@code end_node_id} одного сегмента совпадает со
  *       {@code start_node_id} следующего, включая точки ветвления;</li>
- *   <li>для узлов ветвления (BRANCH) создаются {@link NewChamber};</li>
- *   <li>ДУ берётся из {@link TreeEdge#getDiameterMm()} (заполнено на шаге 4);</li>
- *   <li>расход берётся из {@link TreeEdge#getFlowTph()} (заполнено на шаге 3).</li>
+ *   <li>корневой узел получает тип исходя из {@link TieInCandidate}
+ *       группы: для {@link TieInType#EXISTING_CHAMBER} — существующая
+ *       камера с соответствующим {@code sourceFeatureId}, новая камера
+ *       НЕ создаётся; для {@link TieInType#NEW_CHAMBER} — новая камера;</li>
+ *   <li>узлы ветвления (BRANCH) всегда становятся новыми камерами;</li>
+ *   <li>ДУ берётся из {@link TreeEdge#getDiameterMm()} (шаг 4);</li>
+ *   <li>расход берётся из {@link TreeEdge#getFlowTph()} (шаг 3).</li>
  * </ul>
  */
 @Slf4j
@@ -73,57 +80,73 @@ public class TreeRouteSegmentSplitter {
      *
      * @param tree          дерево маршрутов (после FlowAggregator + TreeDiameterAssigner)
      * @param obstacleModel модель препятствий (для спецзон)
+     * @param sharedTieIn   кандидат врезки группы — определяет тип корневого узла
      * @return плоские списки сегментов, техузлов и новых камер
      */
-    public SplitResult split(RouteTree tree, ObstacleModel obstacleModel) {
+    public SplitResult split(RouteTree tree,
+                             ObstacleModel obstacleModel,
+                             TieInCandidate sharedTieIn) {
         List<RouteSegment> allSegments = new ArrayList<>();
         List<TechnicalNode> allTechNodes = new ArrayList<>();
         List<NewChamber> allChambers = new ArrayList<>();
 
-        // Кэш RouteNode по TreeNode.id — обеспечивает общую топологию
+        TreeNode root = tree.getRoot();
+
+        // Определяем тип корневого узла заранее
+        RouteNodeType rootType;
+        String rootFeatureId = null;
+        if (sharedTieIn.getType() == TieInType.EXISTING_CHAMBER) {
+            rootType = RouteNodeType.EXISTING_CHAMBER;
+            rootFeatureId = sharedTieIn.getExistingChamberId();
+        } else {
+            rootType = RouteNodeType.NEW_CHAMBER;
+        }
+
+        // Кэш RouteNode по TreeNode.id — общая топология
         Map<UUID, RouteNode> nodeCache = new HashMap<>();
+        RouteNode rootRouteNode = new RouteNode(
+                root.getId(), rootType, root.getCoordinateUtm(), rootFeatureId);
+        nodeCache.put(root.getId(), rootRouteNode);
 
         for (TreeEdge edge : tree.getEdges()) {
             splitEdge(edge, obstacleModel, nodeCache,
                     allSegments, allTechNodes);
         }
 
-        // Создаём камеры для узлов ветвления
+        // Камеры для узлов ветвления (BRANCH всегда NEW_CHAMBER)
         for (TreeNode branchNode : tree.getBranchingNodes()) {
             RouteNode routeNode = nodeCache.get(branchNode.getId());
-            if (routeNode != null && routeNode.getType() == RouteNodeType.NEW_CHAMBER) {
+            if (routeNode != null
+                    && routeNode.getType() == RouteNodeType.NEW_CHAMBER) {
                 int maxDn = maxDiameterAtNode(branchNode);
                 allChambers.add(new NewChamber(
                         routeNode.getId(),
                         branchNode.getCoordinateUtm(),
                         maxDn,
-                        null // cost — заготовка под итерацию 7
+                        null
                 ));
             }
         }
 
-        // Камера для корня, если он NEW_CHAMBER
-        TreeNode root = tree.getRoot();
-        RouteNode rootNode = nodeCache.get(root.getId());
-        if (rootNode != null && rootNode.getType() == RouteNodeType.NEW_CHAMBER) {
+        // Камера для корня — только если корень NEW_CHAMBER
+        if (rootType == RouteNodeType.NEW_CHAMBER) {
             int maxDn = maxDiameterAtNode(root);
             allChambers.add(new NewChamber(
-                    rootNode.getId(),
+                    rootRouteNode.getId(),
                     root.getCoordinateUtm(),
                     maxDn,
                     null
             ));
         }
 
-        log.info("Дерево разбито: {} сегментов, {} техузлов, {} камер",
-                allSegments.size(), allTechNodes.size(), allChambers.size());
+        log.info("Дерево разбито: {} сегментов, {} техузлов, {} камер "
+                        + "(root={})",
+                allSegments.size(), allTechNodes.size(),
+                allChambers.size(), rootType);
 
         return new SplitResult(allSegments, allTechNodes, allChambers);
     }
 
-    /**
-     * Разбивает одно ребро дерева по границам спецзон.
-     */
     private void splitEdge(TreeEdge edge,
                            ObstacleModel obstacleModel,
                            Map<UUID, RouteNode> nodeCache,
@@ -145,7 +168,6 @@ public class TreeRouteSegmentSplitter {
                 fullPath, totalLength, indexedLine, obstacleModel);
         List<Double> sortedBps = new ArrayList<>(breakpoints);
 
-        // Получаем или создаём RouteNode для начала и конца ребра
         RouteNode fromRouteNode = getOrCreateRouteNode(
                 edge.getFrom(), nodeCache);
         RouteNode toRouteNode = getOrCreateRouteNode(
@@ -164,7 +186,6 @@ public class TreeRouteSegmentSplitter {
             } else if (i == sortedBps.size() - 1) {
                 subNodes.add(toRouteNode);
             } else {
-                // Промежуточный узел — CORNER или TECHNICAL_NODE
                 subNodes.add(new RouteNode(
                         UUID.randomUUID(),
                         RouteNodeType.CORNER,
@@ -197,7 +218,6 @@ public class TreeRouteSegmentSplitter {
                     kspets, subGeom.getLength(), null);
             allSegments.add(segment);
 
-            // Технический узел на промежуточных границах
             if (i > 0) {
                 LayingMethod prevMethod = allSegments.get(
                         allSegments.size() - 2).getLayingMethod();
@@ -214,21 +234,20 @@ public class TreeRouteSegmentSplitter {
     }
 
     /**
-     * Маппит TreeNode → RouteNode, используя кэш для сохранения топологии.
+     * Маппит TreeNode → RouteNode через кэш. ROOT должен быть
+     * предварительно помещён в кэш (см. {@link #split}); попытка
+     * создать ROOT здесь — ошибка программирования.
      */
     private RouteNode getOrCreateRouteNode(TreeNode treeNode,
                                            Map<UUID, RouteNode> cache) {
         return cache.computeIfAbsent(treeNode.getId(), id -> {
+            if (treeNode.isRoot()) {
+                throw new IllegalStateException(
+                        "ROOT должен быть предварительно помещён в кэш");
+            }
             RouteNodeType type;
             String sourceFeatureId = null;
-
             switch (treeNode.getType()) {
-                case ROOT:
-                    // Корень — точка врезки. Если существующая камера —
-                    // EXISTING_CHAMBER, иначе NEW_CHAMBER.
-                    // Упрощение: определяем по наличию oksFeatureId
-                    type = RouteNodeType.NEW_CHAMBER;
-                    break;
                 case LEAF:
                     type = RouteNodeType.OKS_POINT;
                     sourceFeatureId = treeNode.getOksFeatureId();
@@ -240,13 +259,11 @@ public class TreeRouteSegmentSplitter {
                     type = RouteNodeType.CORNER;
                     break;
             }
-
             return new RouteNode(id, type,
                     treeNode.getCoordinateUtm(), sourceFeatureId);
         });
     }
 
-    /** Максимальный ДУ среди всех примыкающих к узлу рёбер. */
     private int maxDiameterAtNode(TreeNode node) {
         int max = 0;
         if (node.getParentEdge() != null) {
@@ -258,7 +275,6 @@ public class TreeRouteSegmentSplitter {
         return max;
     }
 
-    /** Собирает точки разбиения по границам спецзон (аналог текущего splitter). */
     private TreeSet<Double> collectBreakpoints(LineString fullPath,
                                                double totalLength,
                                                LengthIndexedLine indexedLine,

@@ -33,8 +33,6 @@ public final class TreeEdge {
     private final List<Coordinate> geometryUtm;
     private final double lengthM;
 
-    // ---- Заполняются на шагах 3–4 ----
-
     /** Суммарный расход участка, т/ч (шаг 3). */
     private double flowTph;
 

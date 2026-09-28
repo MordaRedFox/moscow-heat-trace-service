@@ -25,6 +25,22 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * Строит дерево маршрутов для группы ОКС (итерация 6, шаг 2).
+ * <p>
+ * Для каждого ОКС группы выполняется A* до общего tie-in, затем путь
+ * упрощается {@link RouteSimplifier} (в направлении ОКС → tie-in,
+ * с ignore-set полигона ОКС) и разворачивается к корню. Упрощение
+ * критично: A* возвращает путь через углы препятствий, число вершин
+ * которого без упрощения даёт избыточное число узлов дерева. После
+ * упрощения число ветвлений и промежуточных узлов падает в разы, что
+ * ускоряет все последующие шаги.
+ * <p>
+ * Узлы дерева разделяются между путями по совпадению координат в пределах
+ * {@link #COORDINATE_MATCH_EPS_M}: общий префикс путей от tie-in
+ * превращается в общий ствол дерева, ветви расходятся в точке ветвления
+ * (будущая камера).
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -36,10 +52,17 @@ public class TreeRouter {
 
     private final OksConnectionPointResolver oksResolver;
     private final CoordinateTransformService coordinateTransformService;
+    private final RouteSimplifier routeSimplifier;
 
     /**
      * Строит дерево маршрутов для группы ОКС.
-     * Возвращает null, если хотя бы для одного ОКС путь не найден.
+     * Возвращает {@code null}, если хотя бы для одного ОКС путь не найден.
+     *
+     * @param group          группа ОКС с общим tie-in
+     * @param uploadId       id загрузки
+     * @param graph          граф видимости (построен один раз на загрузку)
+     * @param obstacleModel  модель препятствий (нужна RouteSimplifier)
+     * @return дерево маршрутов либо {@code null}
      */
     public RouteTree buildTree(OksGroup group, UUID uploadId,
                                VisibilityGraph graph,
@@ -63,7 +86,7 @@ public class TreeRouter {
                     .map(Collections::singleton)
                     .orElseGet(Collections::emptySet);
 
-            // Путь от ОКС к врезке (ignored применяется к старту = ОКС)
+            // A* в направлении ОКС → tie-in
             VisibilityGraph.PathResult pathResult = graph.shortestPath(
                     oksUtm, tieInUtm, ignoredIds);
 
@@ -72,8 +95,15 @@ public class TreeRouter {
                 return null;
             }
 
+            // Упрощаем путь в исходном направлении ОКС → tie-in:
+            // ignore-set применяется к старту (ОКС в своём полигоне),
+            // что корректно отрабатывает «финальный прямой участок»
+            // по разъяснениям п. 3 ТП
+            List<Coordinate> simplified = routeSimplifier.simplify(
+                    pathResult.getPathUtm(), obstacleModel, ignoredIds);
+
             // Разворачиваем: теперь от врезки к ОКС
-            List<Coordinate> path = new ArrayList<>(pathResult.getPathUtm());
+            List<Coordinate> path = new ArrayList<>(simplified);
             Collections.reverse(path);
             pathsFromTieIn.add(path);
         }
@@ -83,6 +113,12 @@ public class TreeRouter {
 
     /**
      * Пакетный доступ для тестирования логики объединения путей без графа.
+     * Принимает пути уже в направлении tie-in → ОКС.
+     *
+     * @param paths    пути от общего tie-in к каждому ОКС
+     * @param oksList  ОКС группы
+     * @param tieInUtm координата общего tie-in в UTM
+     * @return дерево маршрутов
      */
     RouteTree buildTreeFromPaths(List<List<Coordinate>> paths,
                                  List<OksConnectionPointEntity> oksList,
@@ -115,6 +151,9 @@ public class TreeRouter {
         return new RouteTree(root, allNodes, allEdges, leaves, branchingNodes);
     }
 
+    /**
+     * Вставляет один путь в дерево. Общие префиксы сливаются по координате.
+     */
     private void insertPath(TreeNode root, List<Coordinate> path,
                             OksConnectionPointEntity oks,
                             List<TreeNode> allNodes,
