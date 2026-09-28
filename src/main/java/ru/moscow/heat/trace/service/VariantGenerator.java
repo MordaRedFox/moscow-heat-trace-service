@@ -145,16 +145,16 @@ public class VariantGenerator {
         List<RouteSegment> allSegments = new ArrayList<>();
         List<NewChamber> allChambers = new ArrayList<>();
         Map<String, List<String>> tieInSegmentsMap = new LinkedHashMap<>();
+        Map<String, String> newChamberUuidMap = new HashMap<>();
 
         int segmentCounter = 1;
-        int techNodeCounter = 1;
 
         for (Map.Entry<String, List<OksConnectionPointEntity>> entry : byTieInKey.entrySet()) {
             List<OksConnectionPointEntity> groupPoints = entry.getValue();
             TieInCandidate tieIn = bestCandidateByPoint.get(groupPoints.get(0).getFeatureId());
             Point tieInPoint = tieIn.getTieInPoint();
 
-            RouteNode tieInNode = createTieInNode(tieIn, tieInPoint);
+            RouteNode tieInNode = createTieInNode(tieIn, tieInPoint, newChamberUuidMap);
 
             if (groupPoints.size() == 1) {
                 // Одиночный ОКС в группе
@@ -174,7 +174,7 @@ public class VariantGenerator {
                         segId, oksNode, tieInNode, line, length, spec.getDiameterMm(), flow, 1.0, 1.0, null
                 ));
                 allSegments.add(seg);
-                recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm());
+                recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
             } else {
                 // Несколько ОКС подключаются к одной врезке: создаем разветвительный технический узел (центроид)
                 double sumX = 0, sumY = 0;
@@ -186,7 +186,7 @@ public class VariantGenerator {
                     totalFlow += (p.getFlowTph() != null ? p.getFlowTph() : 0.0);
                 }
                 Point techPoint = geometryFactory.createPoint(new Coordinate(sumX / groupPoints.size(), sumY / groupPoints.size()));
-                RouteNode techNode = new RouteNode("tech-node-" + (techNodeCounter++), null, techPoint, "technical_node");
+                RouteNode techNode = new RouteNode(UUID.randomUUID().toString(), null, techPoint, "technical_node");
 
                 // Магистральный сегмент от технического узла до врезки с суммарным расходом
                 double mainLength = geometryUtils.distanceMeters(techPoint, tieInPoint);
@@ -199,7 +199,7 @@ public class VariantGenerator {
                         mainSegId, techNode, tieInNode, mainLine, mainLength, mainSpec.getDiameterMm(), totalFlow, 1.0, 1.0, null
                 ));
                 allSegments.add(mainSeg);
-                recordTieInSegment(tieIn, mainSeg.getId(), tieInSegmentsMap, allChambers, mainSpec.getDiameterMm());
+                recordTieInSegment(tieIn, mainSeg.getId(), tieInSegmentsMap, allChambers, mainSpec.getDiameterMm(), newChamberUuidMap);
 
                 // Ответвления от каждого ОКС до технического узла
                 for (OksConnectionPointEntity p : groupPoints) {
@@ -245,13 +245,14 @@ public class VariantGenerator {
         List<RouteSegment> allSegments = new ArrayList<>();
         List<NewChamber> allChambers = new ArrayList<>();
         Map<String, List<String>> tieInSegmentsMap = new LinkedHashMap<>();
+        Map<String, String> newChamberUuidMap = new HashMap<>();
 
         int segmentCounter = 1;
 
         for (OksConnectionPointEntity p : points) {
             TieInCandidate tieIn = candidatesByPoint.get(p.getFeatureId()).get(0);
             Point tieInPoint = tieIn.getTieInPoint();
-            RouteNode tieInNode = createTieInNode(tieIn, tieInPoint);
+            RouteNode tieInNode = createTieInNode(tieIn, tieInPoint, newChamberUuidMap);
 
             Point pGeom = (Point) p.getGeometry();
             RouteNode oksNode = new RouteNode("node-oks-" + p.getFeatureId(), p.getFeatureId(), pGeom, "oks");
@@ -268,7 +269,7 @@ public class VariantGenerator {
                     segId, oksNode, tieInNode, line, length, spec.getDiameterMm(), flow, 1.0, 1.0, null
             ));
             allSegments.add(seg);
-            recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm());
+            recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
         }
 
         List<ExistingChamberTieIn> tieIns = buildExistingTieIns(tieInSegmentsMap);
@@ -307,6 +308,7 @@ public class VariantGenerator {
         List<RouteSegment> allSegments = new ArrayList<>();
         List<NewChamber> allChambers = new ArrayList<>();
         Map<String, List<String>> tieInSegmentsMap = new LinkedHashMap<>();
+        Map<String, String> newChamberUuidMap = new HashMap<>();
 
         int segmentCounter = 1;
 
@@ -315,7 +317,7 @@ public class VariantGenerator {
             // Если есть альтернативный кандидат, выбираем его (индекс 1), иначе лучший (индекс 0)
             TieInCandidate tieIn = (list.size() > 1) ? list.get(1) : list.get(0);
             Point tieInPoint = tieIn.getTieInPoint();
-            RouteNode tieInNode = createTieInNode(tieIn, tieInPoint);
+            RouteNode tieInNode = createTieInNode(tieIn, tieInPoint, newChamberUuidMap);
 
             Point pGeom = (Point) p.getGeometry();
             RouteNode oksNode = new RouteNode("node-oks-" + p.getFeatureId(), p.getFeatureId(), pGeom, "oks");
@@ -332,7 +334,7 @@ public class VariantGenerator {
                     segId, oksNode, tieInNode, line, length, spec.getDiameterMm(), flow, 1.0, 1.0, null
             ));
             allSegments.add(seg);
-            recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm());
+            recordTieInSegment(tieIn, seg.getId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
         }
 
         List<ExistingChamberTieIn> tieIns = buildExistingTieIns(tieInSegmentsMap);
@@ -407,7 +409,7 @@ public class VariantGenerator {
         }
         if (variant.getChambers() != null) {
             for (NewChamber c : variant.getChambers()) {
-                set.add("new:" + c.getId() + "@" + Math.round(c.getGeometry().getX()) + "," + Math.round(c.getGeometry().getY()));
+                set.add("new:@" + Math.round(c.getGeometry().getX()) + "," + Math.round(c.getGeometry().getY()));
             }
         }
         return set;
@@ -421,18 +423,24 @@ public class VariantGenerator {
         return "new:" + Math.round(pt.getX()) + ":" + Math.round(pt.getY());
     }
 
-    private RouteNode createTieInNode(TieInCandidate candidate, Point tieInPoint) {
+    private String getNewChamberId(Point pt, Map<String, String> newChamberUuidMap) {
+        String key = Math.round(pt.getX()) + ":" + Math.round(pt.getY());
+        return newChamberUuidMap.computeIfAbsent(key, k -> UUID.randomUUID().toString());
+    }
+
+    private RouteNode createTieInNode(
+            TieInCandidate candidate, Point tieInPoint, Map<String, String> newChamberUuidMap) {
         if (candidate.getTieInType() == TieInType.EXISTING_CHAMBER) {
             return new RouteNode(
-                    "node-ch-" + candidate.getExistingChamberId(),
+                    candidate.getExistingChamberId(),
                     candidate.getExistingChamberId(),
                     tieInPoint,
                     "existing_chamber"
             );
         } else {
-            String chId = "new-ch-" + Math.round(tieInPoint.getX()) + "-" + Math.round(tieInPoint.getY());
+            String chId = getNewChamberId(tieInPoint, newChamberUuidMap);
             return new RouteNode(
-                    "node-" + chId,
+                    chId,
                     null,
                     tieInPoint,
                     "new_chamber"
@@ -445,14 +453,15 @@ public class VariantGenerator {
             String segmentId,
             Map<String, List<String>> tieInSegmentsMap,
             List<NewChamber> allChambers,
-            int segmentDiameter) {
+            int segmentDiameter,
+            Map<String, String> newChamberUuidMap) {
 
         if (candidate.getTieInType() == TieInType.EXISTING_CHAMBER) {
             tieInSegmentsMap.computeIfAbsent(candidate.getExistingChamberId(), k -> new ArrayList<>()).add(segmentId);
         } else {
             // Новая камера
             Point pt = candidate.getTieInPoint();
-            String chamberId = "new-ch-" + Math.round(pt.getX()) + "-" + Math.round(pt.getY());
+            String chamberId = getNewChamberId(pt, newChamberUuidMap);
             boolean exists = allChambers.stream().anyMatch(c -> c.getId().equals(chamberId));
             if (!exists) {
                 int dn = candidate.getRequiredChamberDiameter() != null

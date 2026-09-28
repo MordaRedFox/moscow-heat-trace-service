@@ -146,14 +146,20 @@ public class TraceGeoJsonExporter {
         gen.writeObjectFieldStart("properties");
         gen.writeStringField("object_type", "heat_network");
         gen.writeStringField("variant_id", variantId);
+        writeNodeRef(gen, "start_node_id", segment.getFromNode());
+        writeNodeRef(gen, "end_node_id", segment.getToNode());
         writeNodeRef(gen, "from_node", segment.getFromNode());
         writeNodeRef(gen, "to_node", segment.getToNode());
+        gen.writeNumberField("flow_tph", segment.getFlowTph());
+        gen.writeNumberField("flow", segment.getFlowTph());
         gen.writeNumberField("diameter", segment.getDiameterMm());
         gen.writeNumberField("length", segment.getLengthM());
+        gen.writeStringField("laying_method", segment.getKspets() > 1.0 ? "special" : "base");
+        gen.writeNullField("depth_start");
+        gen.writeNullField("depth_end");
         if (segment.getCost() != null) {
             gen.writeNumberField("cost", segment.getCost());
         }
-        gen.writeNumberField("flow", segment.getFlowTph());
         gen.writeEndObject(); // properties
 
         gen.writeEndObject(); // feature
@@ -245,7 +251,7 @@ public class TraceGeoJsonExporter {
         gen.writeArrayFieldStart("unconnected_oks_ids");
         if (summary.getUnconnectedOksIds() != null) {
             for (String oksId : summary.getUnconnectedOksIds()) {
-                gen.writeString(oksId);
+                writeParsedArrayValue(gen, oksId);
             }
         }
         gen.writeEndArray();
@@ -273,9 +279,13 @@ public class TraceGeoJsonExporter {
     }
 
     private String getEffectiveNodeId(RouteNode node) {
-        return (node.getSourceFeatureId() != null && !node.getSourceFeatureId().isBlank())
-                ? node.getSourceFeatureId()
-                : node.getId();
+        if (node.getSourceFeatureId() != null && !node.getSourceFeatureId().isBlank()) {
+            return node.getSourceFeatureId();
+        }
+        if (node.getId() != null && !node.getId().isBlank()) {
+            return node.getId();
+        }
+        return java.util.UUID.randomUUID().toString();
     }
 
     /**
@@ -291,6 +301,18 @@ public class TraceGeoJsonExporter {
             gen.writeNumberField(fieldName, numericValue);
         } catch (NumberFormatException e) {
             gen.writeStringField(fieldName, rawId);
+        }
+    }
+
+    private void writeParsedArrayValue(JsonGenerator gen, String rawId) throws IOException {
+        if (rawId == null) {
+            return;
+        }
+        try {
+            long numericValue = Long.parseLong(rawId);
+            gen.writeNumber(numericValue);
+        } catch (NumberFormatException e) {
+            gen.writeString(rawId);
         }
     }
 }

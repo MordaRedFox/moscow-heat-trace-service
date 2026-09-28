@@ -84,9 +84,7 @@ public final class VariantSummary {
                 : BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
         this.calculatedCost = calculatedCost != null
                 ? calculatedCost.setScale(2, RoundingMode.HALF_UP)
-                : this.constructionCost.add(this.chamberConstructionCost)
-                .add(this.existingChamberTieInCost)
-                .add(this.unconnectedPenalty);
+                : this.constructionCost.add(this.unconnectedPenalty);
         this.newNetworkLength = Math.round(newNetworkLength * 100.0) / 100.0;
         this.score = Math.round(score * 10000.0) / 10000.0;
         this.unconnectedOksIds = unconnectedOksIds != null

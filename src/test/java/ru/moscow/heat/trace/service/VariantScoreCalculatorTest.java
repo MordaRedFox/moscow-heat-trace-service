@@ -74,13 +74,14 @@ class VariantScoreCalculatorTest {
         );
 
         assertThat(summary.getVariantId()).isEqualTo("v1");
-        assertThat(summary.getConstructionCost()).isEqualByComparingTo(BigDecimal.valueOf(4_000_000));
+        // constructionCost = 4M (сегмент) + 3M (камера) + 5M (врезка) = 12 000 000 руб
+        assertThat(summary.getConstructionCost()).isEqualByComparingTo(BigDecimal.valueOf(12_000_000));
         assertThat(summary.getChamberConstructionCost()).isEqualByComparingTo(BigDecimal.valueOf(3_000_000));
         assertThat(summary.getExistingChamberTieInCount()).isEqualTo(1);
         assertThat(summary.getExistingChamberTieInCost()).isEqualByComparingTo(BigDecimal.valueOf(5_000_000));
         assertThat(summary.getUnconnectedPenalty()).isEqualByComparingTo(BigDecimal.valueOf(105_000_000));
 
-        // Итого calculatedCost = 4M + 3M + 5M + 105M = 117M
+        // Итого calculatedCost = constructionCost (12M) + penalty (105M) = 117M
         assertThat(summary.getCalculatedCost()).isEqualByComparingTo(BigDecimal.valueOf(117_000_000));
         assertThat(summary.getNewNetworkLength()).isEqualTo(50.0);
         assertThat(summary.getUnconnectedOksIds()).containsExactly("oks-unconnected");

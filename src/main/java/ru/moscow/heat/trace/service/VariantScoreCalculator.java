@@ -56,13 +56,13 @@ public class VariantScoreCalculator {
             Collection<ExistingChamberTieIn> tieIns,
             Collection<UnconnectedOks> unconnectedList) {
 
-        BigDecimal constructionCost = BigDecimal.ZERO;
+        BigDecimal networkSegmentsCost = BigDecimal.ZERO;
         double totalLength = 0.0;
         if (segments != null) {
             for (RouteSegment segment : segments) {
                 totalLength += segment.getLengthM();
                 if (segment.getCost() != null) {
-                    constructionCost = constructionCost.add(segment.getCost());
+                    networkSegmentsCost = networkSegmentsCost.add(segment.getCost());
                 }
             }
         }
@@ -87,6 +87,11 @@ public class VariantScoreCalculator {
             }
         }
 
+        BigDecimal constructionCost = networkSegmentsCost
+                .add(chamberCost)
+                .add(tieInCost)
+                .setScale(2, RoundingMode.HALF_UP);
+
         BigDecimal penalty = BigDecimal.ZERO;
         List<String> unconnectedIds = List.of();
         if (unconnectedList != null && !unconnectedList.isEmpty()) {
@@ -98,8 +103,6 @@ public class VariantScoreCalculator {
         }
 
         BigDecimal calculatedCost = constructionCost
-                .add(chamberCost)
-                .add(tieInCost)
                 .add(penalty)
                 .setScale(2, RoundingMode.HALF_UP);
 

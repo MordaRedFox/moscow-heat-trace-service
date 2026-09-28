@@ -74,7 +74,7 @@ class TraceGeoJsonExporterIntegrationTest {
         VariantSummary summary = new VariantSummary(
                 "v1",
                 1,
-                BigDecimal.valueOf(10_550_700L),
+                BigDecimal.valueOf(18_550_700L),
                 BigDecimal.valueOf(3_000_000L),
                 1,
                 BigDecimal.valueOf(5_000_000L),
@@ -82,7 +82,7 @@ class TraceGeoJsonExporterIntegrationTest {
                 BigDecimal.valueOf(18_550_700L),
                 100.0,
                 0.8194,
-                List.of()
+                List.of("1001", "oks-alpha")
         );
 
         VariantResult variant = new VariantResult(
@@ -115,12 +115,23 @@ class TraceGeoJsonExporterIntegrationTest {
         assertThat(networkFeature.get("id").asLong()).isEqualTo(12345L);
 
         JsonNode netProps = networkFeature.get("properties");
-        // from_node с sourceFeatureId="1001" должно быть числом
+        // start_node_id и from_node с sourceFeatureId="1001" должны быть числами
+        assertThat(netProps.get("start_node_id").isNumber()).isTrue();
+        assertThat(netProps.get("start_node_id").asLong()).isEqualTo(1001L);
         assertThat(netProps.get("from_node").isNumber()).isTrue();
         assertThat(netProps.get("from_node").asLong()).isEqualTo(1001L);
-        // to_node с sourceFeatureId="oks-alpha" должно быть строкой
+
+        // end_node_id и to_node с sourceFeatureId="oks-alpha" должны быть строками
+        assertThat(netProps.get("end_node_id").isTextual()).isTrue();
+        assertThat(netProps.get("end_node_id").asText()).isEqualTo("oks-alpha");
         assertThat(netProps.get("to_node").isTextual()).isTrue();
         assertThat(netProps.get("to_node").asText()).isEqualTo("oks-alpha");
+
+        // flow_tph, laying_method, depth_start, depth_end
+        assertThat(netProps.get("flow_tph").asDouble()).isEqualTo(25.0);
+        assertThat(netProps.get("laying_method").asText()).isEqualTo("base");
+        assertThat(netProps.get("depth_start").isNull()).isTrue();
+        assertThat(netProps.get("depth_end").isNull()).isTrue();
 
         // Геометрия LineString трансформирована в WGS84 (lon в районе ~37 град, lat в районе ~55 град)
         JsonNode netGeom = networkFeature.get("geometry");
@@ -149,8 +160,17 @@ class TraceGeoJsonExporterIntegrationTest {
         assertThat(summaryFeature.get("geometry").isNull()).isTrue();
         JsonNode summaryProps = summaryFeature.get("properties");
         assertThat(summaryProps.get("rank").asInt()).isEqualTo(1);
+        assertThat(summaryProps.get("construction_cost").asDouble()).isEqualTo(18_550_700.0);
         assertThat(summaryProps.get("calculated_cost").asDouble()).isEqualTo(18_550_700.0);
         assertThat(summaryProps.get("new_network_length").asDouble()).isEqualTo(100.0);
+
+        // Проверяем типы элементов в unconnected_oks_ids: число сохраняется числом, строка строкой
+        JsonNode unconnectedArray = summaryProps.get("unconnected_oks_ids");
+        assertThat(unconnectedArray.isArray()).isTrue();
+        assertThat(unconnectedArray.get(0).isNumber()).isTrue();
+        assertThat(unconnectedArray.get(0).asLong()).isEqualTo(1001L);
+        assertThat(unconnectedArray.get(1).isTextual()).isTrue();
+        assertThat(unconnectedArray.get(1).asText()).isEqualTo("oks-alpha");
 
         // Проверяем, что variant_id присутствует у всех объектов
         for (JsonNode f : features) {
