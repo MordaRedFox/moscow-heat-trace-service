@@ -2,14 +2,29 @@ package ru.moscow.heat.trace.service;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Point;
+import ru.moscow.heat.spatial.ChamberCostTable;
+import ru.moscow.heat.spatial.DiameterTable;
+import ru.moscow.heat.spatial.GeometryUtils;
 import ru.moscow.heat.trace.dto.ExistingChamberTieIn;
+import ru.moscow.heat.trace.dto.TieInCandidate;
+import ru.moscow.heat.trace.dto.TraceResult;
 import ru.moscow.heat.trace.dto.VariantResult;
 import ru.moscow.heat.trace.dto.VariantSummary;
+import ru.moscow.heat.geojson.entity.OksConnectionPointEntity;
+import ru.moscow.heat.trace.model.NewChamber;
+import ru.moscow.heat.geojson.repository.OksConnectionPointRepository;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class VariantGeneratorTest {
 
@@ -71,5 +86,79 @@ class VariantGeneratorTest {
         assertThat(deduplicated).hasSize(2);
         assertThat(deduplicated.get(0).getVariantId()).isEqualTo("v1");
         assertThat(deduplicated.get(1).getVariantId()).isEqualTo("v2");
+    }
+
+    @Test
+    @DisplayName("Врезка группы ОКС создает платную камеру разветвления per TP 2.1 и уточнение 13")
+    void testBranchingNodeCreatedAsPaidNewChamber() {
+        OksConnectionPointRepository oksRepo = mock(OksConnectionPointRepository.class);
+        TieInCandidateService candidateService = mock(TieInCandidateService.class);
+        DiameterTable diameterTable = new DiameterTable();
+        CostCalculator costCalc = new CostCalculator(diameterTable);
+        ChamberCostCalculator chamberCalc = new ChamberCostCalculator(new ChamberCostTable());
+        VariantScoreCalculator scoreCalc = new VariantScoreCalculator();
+        VariantRanker ranker = new VariantRanker();
+        ru.moscow.heat.geojson.service.CoordinateTransformService transformService = new ru.moscow.heat.geojson.service.CoordinateTransformService();
+        GeometryUtils geomUtils = new GeometryUtils(transformService);
+        GeometryFactory gf = new GeometryFactory();
+
+        VariantGenerator generatorWithMocks = new VariantGenerator(
+                oksRepo, candidateService, diameterTable, costCalc, chamberCalc, scoreCalc, ranker, geomUtils
+        );
+
+        UUID uploadId = UUID.randomUUID();
+        UUID traceId = UUID.randomUUID();
+
+        // 2 ОКС точки рядом (< 200 м), чтобы они сгруппировались
+        OksConnectionPointEntity p1 = new OksConnectionPointEntity();
+        p1.setFeatureId("oks-1");
+        p1.setUploadId(uploadId);
+        p1.setGeometry(gf.createPoint(new Coordinate(414000.0, 6180000.0)));
+        p1.setFlowTph(25.0);
+
+        OksConnectionPointEntity p2 = new OksConnectionPointEntity();
+        p2.setFeatureId("oks-2");
+        p2.setUploadId(uploadId);
+        p2.setGeometry(gf.createPoint(new Coordinate(414050.0, 6180000.0)));
+        p2.setFlowTph(25.0);
+
+        when(oksRepo.findByUploadId(uploadId)).thenReturn(List.of(p1, p2));
+
+        Point tieInPt = gf.createPoint(new Coordinate(414025.0, 6180100.0));
+        TieInCandidate cand = TieInCandidate.builder()
+                .id("cand-1")
+                .connectionPointId("oks-1")
+                .heatNetworkId("net-1")
+                .type(ru.moscow.heat.trace.dto.TieInType.EXISTING_CHAMBER)
+                .existingChamberId("ch-existing-1")
+                .tieInPoint(tieInPt)
+                .targetPoint(tieInPt)
+                .cost(5_000_000L)
+                .build();
+
+        when(candidateService.findCandidatesForAllPoints(uploadId))
+                .thenReturn(Map.of("oks-1", List.of(cand), "oks-2", List.of(cand)));
+
+        TraceResult result = generatorWithMocks.generateTraceResult(uploadId, traceId);
+        assertThat(result.getVariants()).isNotEmpty();
+
+        // Ищем вариант v1 (Grouping)
+        VariantResult v1 = result.getVariants().stream()
+                .filter(v -> "v1".equals(v.getVariantId()))
+                .findFirst()
+                .orElse(null);
+        assertThat(v1).isNotNull();
+
+        // Должна быть создана разветвительная камера в allChambers
+        assertThat(v1.getChambers()).isNotEmpty();
+        NewChamber branchChamber = v1.getChambers().stream()
+                .filter(c -> c.getId().startsWith("ch-branch-"))
+                .findFirst()
+                .orElse(null);
+        assertThat(branchChamber).isNotNull();
+        // Стоимость камеры 3..12 млн руб
+        assertThat(branchChamber.getCost()).isBetween(BigDecimal.valueOf(3_000_000L), BigDecimal.valueOf(12_000_000L));
+        // И эта стоимость должна входить в chamberConstructionCost сводки
+        assertThat(v1.getSummary().getChamberConstructionCost()).isGreaterThanOrEqualTo(branchChamber.getCost());
     }
 }

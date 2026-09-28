@@ -176,7 +176,7 @@ public class VariantGenerator {
                 allSegments.add(seg);
                 recordTieInSegment(tieIn, seg.getStringId(), tieInSegmentsMap, allChambers, spec.getDiameterMm(), newChamberUuidMap);
             } else {
-                // Несколько ОКС подключаются к одной врезке: создаем разветвительный технический узел (центроид)
+                // Несколько ОКС подключаются к одной врезке: создаем разветвительную камеру (центроид) (ТЗ 2.1, уточнение 13)
                 double sumX = 0, sumY = 0;
                 double totalFlow = 0;
                 for (OksConnectionPointEntity p : groupPoints) {
@@ -186,11 +186,17 @@ public class VariantGenerator {
                     totalFlow += (p.getFlowTph() != null ? p.getFlowTph() : 0.0);
                 }
                 Point techPoint = geometryFactory.createPoint(new Coordinate(sumX / groupPoints.size(), sumY / groupPoints.size()));
-                RouteNode techNode = new RouteNode(UUID.randomUUID().toString(), null, techPoint, "technical_node");
 
-                // Магистральный сегмент от технического узла до врезки с суммарным расходом
+                // Магистральный сегмент от разветвительного узла до врезки с суммарным расходом
                 double mainLength = geometryUtils.distanceMeters(techPoint, tieInPoint);
                 DiameterSpec mainSpec = diameterTable.minDiameterForFlowAndLength(totalFlow, mainLength);
+
+                // Создаем платную камеру на разветвлении согласно ТЗ 2.1 и уточнению 13
+                String branchChamberId = "ch-branch-" + UUID.randomUUID().toString().substring(0, 8);
+                NewChamber branchChamber = chamberCostCalculator.createChamber(branchChamberId, techPoint, mainSpec.getDiameterMm());
+                allChambers.add(branchChamber);
+                RouteNode techNode = new RouteNode(branchChamberId, branchChamberId, techPoint, "new_chamber");
+
                 LineString mainLine = geometryFactory.createLineString(new Coordinate[]{
                         techPoint.getCoordinate(), tieInPoint.getCoordinate()
                 });

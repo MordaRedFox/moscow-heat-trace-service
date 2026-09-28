@@ -30,6 +30,13 @@ public class ChamberCostCalculator {
     }
 
     /**
+     * Алиас для расчета стоимости строительства новой камеры по ДУ.
+     */
+    public BigDecimal calculateChamberCost(int diameterMm) {
+        return calculateCost(diameterMm);
+    }
+
+    /**
      * Создает экземпляр NewChamber с автоматически заполненным полем стоимости cost по ДУ.
      *
      * @param id         идентификатор камеры
