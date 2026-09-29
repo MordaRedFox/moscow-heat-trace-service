@@ -14,6 +14,8 @@ mvnw.cmd
 
 # Логи и системное
 *.log
+*.tmp
+*.swp
 
 # Devcontainer (не нужен в образе)
 .devcontainer
@@ -24,3 +26,7 @@ docker-compose.yml
 docker-compose.*.yml
 Dockerfile
 .dockerignore
+
+# Тестовые данные и снапшоты
+*.geojson
+!src/test/resources/**/*.geojson

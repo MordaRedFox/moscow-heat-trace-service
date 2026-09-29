@@ -1,8 +1,6 @@
 version: "3.8"
 
 services:
-  # PostgreSQL с PostGIS - обязателен для хранения geom/geom_utm
-  # Обычный postgres НЕ подойдет: нет расширения postgis
   postgres:
     image: postgis/postgis:16-3.4
     container_name: heat-postgres
@@ -11,6 +9,7 @@ services:
       POSTGRES_DB: heat_trace
       POSTGRES_USER: heat
       POSTGRES_PASSWORD: heat
+      TZ: Europe/Moscow
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -23,13 +22,15 @@ services:
     ports:
       - "5432:5432"
 
-  # Spring Boot-приложение
+  # Spring Boot-приложение (Java 11, Ubuntu 22.04 Jammy)
   app:
     build:
       context: .
       dockerfile: Dockerfile
+    image: heat-trace-service:latest
     container_name: heat-trace-service
     restart: unless-stopped
+    init: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,14 +38,17 @@ services:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/heat_trace
       SPRING_DATASOURCE_USERNAME: heat
       SPRING_DATASOURCE_PASSWORD: heat
+      TZ: Europe/Moscow
     volumes:
-      # Временная директория для multipart и файлов загрузки
-      # до 3 ГБ (heat.upload.temp-dir = ${java.io.tmpdir}/heat-uploads).
-      # Монтируем том, чтобы файлы не упирались в эфемерный /tmp
-      # контейнера и не терялись при рестарте
       - heat_uploads:/var/tmp/heat
     ports:
       - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
 
 volumes:
   postgres_data:
