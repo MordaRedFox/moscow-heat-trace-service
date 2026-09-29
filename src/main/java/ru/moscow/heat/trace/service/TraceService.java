@@ -1,29 +1,37 @@
 package ru.moscow.heat.trace.service;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
 import ru.moscow.heat.geojson.repository.UploadSessionRepository;
 import ru.moscow.heat.trace.dto.TieInCandidate;
 import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
+import ru.moscow.heat.trace.dto.TraceResult;
 import ru.moscow.heat.trace.dto.TraceStatus;
 import ru.moscow.heat.trace.dto.TraceStatusResponse;
 import ru.moscow.heat.trace.dto.VariantResult;
 import ru.moscow.heat.trace.dto.VariantSummary;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
 import ru.moscow.heat.trace.exception.VariantNotFoundException;
-import ru.moscow.heat.trace.model.TraceResult;
 import ru.moscow.heat.trace.model.UnconnectedOks;
 
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * Сервис управления сессиями моделирования трасс тепловых сетей.
+ * Сервис управления сессиями трассировки.
+ *
+ * <p>Хранит сессии в памяти ({@code ConcurrentHashMap}): {@code traceId → uploadId},
+ * {@code traceId → TraceStatusResponse}, {@code traceId → dto.TraceResult}.
+ * При перезапуске приложения сессии теряются — персистентное хранение
+ * вне рамок итерации 7.
  */
 @Slf4j
 @Service
@@ -31,56 +39,28 @@ public class TraceService {
 
     private final UploadSessionRepository uploadSessionRepository;
     private final TieInCandidateService tieInCandidateService;
-    private final VariantGenerator variantGenerator;
     private final TraceGeoJsonExporter traceGeoJsonExporter;
     private final TraceResultMapper traceResultMapper;
 
     private final Map<UUID, TraceStatusResponse> sessions = new ConcurrentHashMap<>();
     private final Map<UUID, UUID> traceToUpload = new ConcurrentHashMap<>();
-    private final Map<UUID, TraceResult> traceResults = new ConcurrentHashMap<>();
-    private final Map<UUID, ru.moscow.heat.trace.dto.TraceResult> variantResults = new ConcurrentHashMap<>();
+    private final Map<UUID, TraceResult> variantResults = new ConcurrentHashMap<>();
 
-    @Autowired
-    public TraceService(
-            UploadSessionRepository uploadSessionRepository,
-            TieInCandidateService tieInCandidateService,
-            @Autowired(required = false) VariantGenerator variantGenerator,
-            @Autowired(required = false) TraceGeoJsonExporter traceGeoJsonExporter,
-            @Autowired(required = false) TraceResultMapper traceResultMapper) {
+    public TraceService(UploadSessionRepository uploadSessionRepository,
+                        TieInCandidateService tieInCandidateService,
+                        TraceGeoJsonExporter traceGeoJsonExporter,
+                        TraceResultMapper traceResultMapper) {
         this.uploadSessionRepository = uploadSessionRepository;
         this.tieInCandidateService = tieInCandidateService;
-        this.variantGenerator = variantGenerator;
         this.traceGeoJsonExporter = traceGeoJsonExporter;
         this.traceResultMapper = traceResultMapper;
     }
 
-    public TraceService(
-            UploadSessionRepository uploadSessionRepository,
-            TieInCandidateService tieInCandidateService,
-            VariantGenerator variantGenerator,
-            TraceGeoJsonExporter traceGeoJsonExporter) {
-        this(uploadSessionRepository, tieInCandidateService, variantGenerator, traceGeoJsonExporter, null);
-    }
-
-    public TraceService(
-            UploadSessionRepository uploadSessionRepository,
-            TieInCandidateService tieInCandidateService) {
-        this(uploadSessionRepository, tieInCandidateService, null, null, null);
-    }
-
-    /**
-     * Создает новую сессию трассировки в статусе {@link TraceStatus#PENDING}.
-     *
-     * @param uploadId идентификатор сессии загрузки
-     * @return ответ о принятии задачи
-     * @throws UploadNotFoundException если сессия загрузки не найдена
-     */
     public TraceAcceptedResponse createTraceSession(UUID uploadId) {
         if (uploadId == null
                 || !uploadSessionRepository.existsById(uploadId)) {
             throw new UploadNotFoundException(
-                    "Сессия загрузки с id=" + uploadId
-                            + " не найдена");
+                    "Сессия загрузки с id=" + uploadId + " не найдена");
         }
 
         UUID traceId = UUID.randomUUID();
@@ -97,17 +77,11 @@ public class TraceService {
         sessions.put(traceId, initialStatus);
         traceToUpload.put(traceId, uploadId);
 
-        log.info("Создана сессия трассировки [{}] для загрузки [{}]", traceId, uploadId);
+        log.info("Создана сессия трассировки [{}] для загрузки [{}]",
+                traceId, uploadId);
         return new TraceAcceptedResponse(traceId, "/api/trace/" + traceId);
     }
 
-    /**
-     * Возвращает текущий статус задачи моделирования трасс.
-     *
-     * @param traceId идентификатор задачи трассировки
-     * @return статус задачи
-     * @throws TraceNotFoundException если задача не найдена
-     */
     public TraceStatusResponse getTraceStatus(UUID traceId) {
         TraceStatusResponse status = sessions.get(traceId);
         if (status == null) {
@@ -123,25 +97,56 @@ public class TraceService {
                 .build());
     }
 
-    public void markCompleted(UUID traceId, TraceResult result) {
-        traceResults.put(traceId, result);
-        if (traceResultMapper != null) {
-            UUID uploadId = traceToUpload.get(traceId);
-            if (uploadId != null) {
-                variantResults.put(traceId, traceResultMapper.toTraceResult(uploadId, traceId, result));
-            }
-        }
-        List<String> unconnectedIds = result.getUnconnectedOks().stream()
-                .map(UnconnectedOks::getOksPointFeatureId)
-                .collect(Collectors.toList());
+    /**
+     * Завершает сессию трассировки: сохраняет DTO с вариантами, обновляет
+     * статус и счётчики. Если маппинг падает — сохраняем сессию как
+     * COMPLETED с базовыми счётчиками (без вариантов), чтобы результат
+     * main-стратегии не терялся.
+     *
+     * @param traceId     id сессии
+     * @param orchResults список результатов от оркестратора (обычно 3)
+     */
+    public void markCompleted(UUID traceId,
+                              List<ru.moscow.heat.trace.model.TraceResult> orchResults) {
+        UUID uploadId = traceToUpload.get(traceId);
+        int totalOks = 0;
+        int connected = 0;
+        int unconnected = 0;
+        List<String> unconnectedIds = Collections.emptyList();
 
+        if (orchResults != null && !orchResults.isEmpty()) {
+            ru.moscow.heat.trace.model.TraceResult main = orchResults.get(0);
+            totalOks = main.getSummaryCounters().getTotalOksCount();
+            connected = main.getSummaryCounters().getConnectedCount();
+            unconnected = main.getSummaryCounters().getUnconnectedCount();
+            unconnectedIds = main.getUnconnectedOks().stream()
+                    .map(UnconnectedOks::getOksPointFeatureId)
+                    .collect(Collectors.toList());
+        }
+
+        try {
+            if (uploadId != null && traceResultMapper != null) {
+                TraceResult dtoResult = traceResultMapper
+                        .toTraceResult(uploadId, traceId, orchResults);
+                variantResults.put(traceId, dtoResult);
+            }
+        } catch (Exception e) {
+            log.error("Не удалось сформировать варианты для [{}], "
+                    + "сессия будет завершена без вариантов: {}",
+                    traceId, e.getMessage(), e);
+        }
+
+        final int tOks = totalOks;
+        final int cOks = connected;
+        final int uOks = unconnected;
+        final List<String> uIds = unconnectedIds;
         update(traceId, current -> current.toBuilder()
                 .status(TraceStatus.COMPLETED)
                 .completedAt(Instant.now())
-                .totalOksCount(result.getSummaryCounters().getTotalOksCount())
-                .connectedCount(result.getSummaryCounters().getConnectedCount())
-                .unconnectedCount(result.getSummaryCounters().getUnconnectedCount())
-                .unconnectedOksFeatureIds(unconnectedIds)
+                .totalOksCount(tOks)
+                .connectedCount(cOks)
+                .unconnectedCount(uOks)
+                .unconnectedOksFeatureIds(uIds)
                 .build());
     }
 
@@ -151,13 +156,6 @@ public class TraceService {
                 .completedAt(Instant.now())
                 .errorMessage(errorMessage)
                 .build());
-    }
-
-    public TraceResult getTraceResult(UUID traceId) {
-        if (!sessions.containsKey(traceId)) {
-            throw new TraceNotFoundException(traceId);
-        }
-        return traceResults.get(traceId);
     }
 
     public List<TieInCandidate> getCandidates(UUID traceId) {
@@ -175,32 +173,24 @@ public class TraceService {
     }
 
     /**
-     * Получает результат трассировки с вариантами (Итерация 7)
+     * Возвращает публичный результат со списком вариантов.
+     *
+     * @param traceId id сессии
+     * @return DTO или {@code null}, если варианты ещё не сформированы
+     * @throws TraceNotFoundException если сессия не найдена
      */
-    public ru.moscow.heat.trace.dto.TraceResult getVariantsTraceResult(UUID traceId) {
+    public TraceResult getVariantsTraceResult(UUID traceId) {
         if (!sessions.containsKey(traceId)) {
             throw new TraceNotFoundException(traceId);
         }
-        ru.moscow.heat.trace.dto.TraceResult result = variantResults.get(traceId);
-        if (result == null) {
-            UUID uploadId = traceToUpload.get(traceId);
-            ru.moscow.heat.trace.model.TraceResult orchResult = traceResults.get(traceId);
-            if (orchResult != null && traceResultMapper != null) {
-                result = traceResultMapper.toTraceResult(uploadId, traceId, orchResult);
-                variantResults.put(traceId, result);
-            } else if (variantGenerator != null) {
-                result = variantGenerator.generateTraceResult(uploadId, traceId);
-                variantResults.put(traceId, result);
-            }
-        }
-        return result;
+        return variantResults.get(traceId);
     }
 
     /**
-     * Получает список ранжированных сводок вариантов трассировки
+     * Ранжированный список сводок вариантов.
      */
     public List<VariantSummary> getVariants(UUID traceId) {
-        ru.moscow.heat.trace.dto.TraceResult result = getVariantsTraceResult(traceId);
+        TraceResult result = getVariantsTraceResult(traceId);
         if (result == null || result.getVariants() == null) {
             return Collections.emptyList();
         }
@@ -210,10 +200,10 @@ public class TraceService {
     }
 
     /**
-     * Выполняет потоковый экспорт одного или всех вариантов в GeoJSON
+     * Потоковый экспорт одного или всех вариантов в GeoJSON.
      */
     public StreamingResponseBody exportTrace(UUID traceId, String variantId) {
-        ru.moscow.heat.trace.dto.TraceResult result = getVariantsTraceResult(traceId);
+        TraceResult result = getVariantsTraceResult(traceId);
         if (result == null) {
             throw new TraceNotFoundException(traceId);
         }
@@ -225,13 +215,15 @@ public class TraceService {
                     .filter(v -> variantId.equalsIgnoreCase(v.getVariantId()))
                     .findFirst()
                     .orElseThrow(() -> new VariantNotFoundException(
-                            "Вариант трассировки [" + variantId + "] не найден для задачи [" + traceId + "]"));
+                            "Вариант [" + variantId + "] не найден для ["
+                                    + traceId + "]"));
             return traceGeoJsonExporter.exportVariantStreaming(variant);
         }
         return traceGeoJsonExporter.exportAllVariantsStreaming(result);
     }
 
-    private void update(UUID traceId, java.util.function.UnaryOperator<TraceStatusResponse> mutator) {
+    private void update(UUID traceId,
+                        java.util.function.UnaryOperator<TraceStatusResponse> mutator) {
         TraceStatusResponse updated = sessions.compute(traceId, (id, current) -> {
             if (current == null) {
                 throw new TraceNotFoundException(traceId);

@@ -23,27 +23,23 @@ import java.util.Map;
  * <p>
  * Правила группировки:
  * <ol>
- *     <li><b>По общей камере:</b> ОКС, у которых выбранный кандидат имеет
- *     одинаковый ненулевой {@code existingChamberId}, объединяются в одну
- *     группу.</li>
- *     <li><b>По радиусу:</b> ОКС, у которых точки врезки (tie-in) находятся
- *     в пределах {@link #JOINT_TIE_IN_RADIUS_M} метров друг от друга,
- *     объединяются. Радиусное объединение применяется только к парам
- *     (без транзитивности через цепочки), чтобы избежать «ползущих»
- *     групп.</li>
- *     <li><b>Одиночные:</b> ОКС, не попавшие ни в одну группу, формируют
- *     группы из одного элемента.</li>
+ *     <li><b>По общей камере:</b> ОКС с одинаковым {@code existingChamberId};</li>
+ *     <li><b>По радиусу:</b> ОКС, чьи tie-in точки в пределах
+ *         {@link #JOINT_TIE_IN_RADIUS_M} метров друг от друга;</li>
+ *     <li><b>Одиночные:</b> ОКС, не попавшие ни в одну группу.</li>
  * </ol>
- * <p>
- * Приоритет: камерное объединение первично. Если ОКС уже в камерной группе,
- * радиусное объединение к нему не применяется.
+ *
+ * <p>Флаг {@code noGroup} отключает группировку — каждый ОКС становится
+ * отдельной группой. Используется в стратегии
+ * {@code TraceOrchestrator.TraceStrategy#NO_GROUP} для формирования
+ * варианта без объединения.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class OksGrouper {
 
-    /** Радиус объединения точек врезки, метры (план итерации 6). */
+    /** Радиус объединения точек врезки, метры. */
     public static final double JOINT_TIE_IN_RADIUS_M = 30.0;
 
     private static final GeometryFactory GEOMETRY_FACTORY = new GeometryFactory();
@@ -52,61 +48,71 @@ public class OksGrouper {
     private final CoordinateTransformService coordinateTransformService;
 
     /**
-     * Выполняет группировку ОКС по их кандидатам врезки.
+     * Группировка с основными правилами (эквивалент {@code noGroup = false}).
      *
-     * @param oksList    все ОКС загрузки
-     * @param candidatesByOksId карта: featureId ОКС → выбранный кандидат
-     * @return список групп (каждая содержит ≥ 1 ОКС)
+     * @param oksList           все ОКС загрузки
+     * @param candidatesByOksId карта featureId ОКС → выбранный кандидат
+     * @return список групп
      */
     public List<OksGroup> group(List<OksConnectionPointEntity> oksList,
                                 Map<String, TieInCandidate> candidatesByOksId) {
+        return group(oksList, candidatesByOksId, false);
+    }
+
+    /**
+     * Группировка с возможностью отключения объединения.
+     *
+     * @param oksList           все ОКС загрузки
+     * @param candidatesByOksId карта featureId ОКС → выбранный кандидат
+     * @param noGroup           {@code true} — каждый ОКС отдельной группой
+     * @return список групп
+     */
+    public List<OksGroup> group(List<OksConnectionPointEntity> oksList,
+                                Map<String, TieInCandidate> candidatesByOksId,
+                                boolean noGroup) {
         if (oksList.isEmpty()) {
             return List.of();
         }
+        if (noGroup) {
+            return buildSingletons(oksList, candidatesByOksId);
+        }
 
-        // Индексируем ОКС по featureId для быстрого доступа
         Map<String, OksConnectionPointEntity> oksById = new HashMap<>();
         for (OksConnectionPointEntity oks : oksList) {
             oksById.put(oks.getFeatureId(), oks);
         }
 
-        // --- Шаг 1: камерная группировка (по existingChamberId) ---
         Map<String, List<String>> chamberGroups = new HashMap<>();
         List<String> ungrouped = new ArrayList<>();
 
         for (OksConnectionPointEntity oks : oksList) {
             TieInCandidate candidate = candidatesByOksId.get(oks.getFeatureId());
-            if (candidate == null) {
-                // ОКС без кандидата не участвует в группировке
-                continue;
-            }
+            if (candidate == null) continue;
             if (candidate.getType() == TieInType.EXISTING_CHAMBER
                     && candidate.getExistingChamberId() != null) {
                 chamberGroups
-                        .computeIfAbsent(candidate.getExistingChamberId(), k -> new ArrayList<>())
+                        .computeIfAbsent(candidate.getExistingChamberId(),
+                                k -> new ArrayList<>())
                         .add(oks.getFeatureId());
             } else {
                 ungrouped.add(oks.getFeatureId());
             }
         }
 
-        // Формируем камерные группы (только если в группе > 1 ОКС,
-        // иначе переводим в разряд одиночных)
         List<OksGroup> result = new ArrayList<>();
         List<String> forRadiusGrouping = new ArrayList<>(ungrouped);
 
         for (Map.Entry<String, List<String>> entry : chamberGroups.entrySet()) {
             List<String> memberIds = entry.getValue();
             if (memberIds.size() == 1) {
-                // Одиночный ОКС с камерным кандидатом — не группа
                 forRadiusGrouping.add(memberIds.get(0));
             } else {
                 result.add(buildGroup(memberIds, oksById, candidatesByOksId, true));
             }
         }
 
-        // --- Шаг 2: радиусная группировка (для оставшихся) ---
-        List<OksGroup> radiusGroups = groupByRadius(forRadiusGrouping, oksById, candidatesByOksId);
+        List<OksGroup> radiusGroups = groupByRadius(
+                forRadiusGrouping, oksById, candidatesByOksId);
         result.addAll(radiusGroups);
 
         log.info("OksGrouper: {} ОКС → {} групп (камерных: {}, радиусных/одиночных: {})",
@@ -117,17 +123,31 @@ public class OksGrouper {
         return result;
     }
 
-    /**
-     * Радиусная группировка: объединяем пары ОКС, чьи точки врезки
-     * в пределах JOINT_TIE_IN_RADIUS_M. Без транзитивности.
-     */
+    /** Строит одиночные группы (каждый ОКС — отдельно). */
+    private List<OksGroup> buildSingletons(List<OksConnectionPointEntity> oksList,
+                                            Map<String, TieInCandidate> candidatesByOksId) {
+        List<OksGroup> result = new ArrayList<>();
+        for (OksConnectionPointEntity oks : oksList) {
+            TieInCandidate c = candidatesByOksId.get(oks.getFeatureId());
+            if (c == null) continue;
+            boolean byChamber = c.getType() == TieInType.EXISTING_CHAMBER;
+            result.add(new OksGroup(
+                    List.of(oks),
+                    List.of(c),
+                    c,
+                    byChamber));
+        }
+        log.info("OksGrouper (noGroup): {} ОКС → {} одиночных групп",
+                oksList.size(), result.size());
+        return result;
+    }
+
     private List<OksGroup> groupByRadius(List<String> oksIds,
                                          Map<String, OksConnectionPointEntity> oksById,
                                          Map<String, TieInCandidate> candidatesByOksId) {
         List<OksGroup> groups = new ArrayList<>();
         boolean[] used = new boolean[oksIds.size()];
 
-        // Конвертируем tie-in точки в UTM для расчёта расстояний
         Coordinate[] tieInUtm = new Coordinate[oksIds.size()];
         for (int i = 0; i < oksIds.size(); i++) {
             TieInCandidate c = candidatesByOksId.get(oksIds.get(i));
@@ -135,17 +155,13 @@ public class OksGrouper {
         }
 
         for (int i = 0; i < oksIds.size(); i++) {
-            if (used[i]) {
-                continue;
-            }
+            if (used[i]) continue;
             List<String> groupMembers = new ArrayList<>();
             groupMembers.add(oksIds.get(i));
             used[i] = true;
 
             for (int j = i + 1; j < oksIds.size(); j++) {
-                if (used[j]) {
-                    continue;
-                }
+                if (used[j]) continue;
                 double dist = tieInUtm[i].distance(tieInUtm[j]);
                 if (dist <= JOINT_TIE_IN_RADIUS_M) {
                     groupMembers.add(oksIds.get(j));
@@ -155,14 +171,9 @@ public class OksGrouper {
 
             groups.add(buildGroup(groupMembers, oksById, candidatesByOksId, false));
         }
-
         return groups;
     }
 
-    /**
-     * Строит OksGroup из списка featureId участников.
-     * Общий tie-in — кандидат первого участника (представительный).
-     */
     private OksGroup buildGroup(List<String> memberIds,
                                 Map<String, OksConnectionPointEntity> oksById,
                                 Map<String, TieInCandidate> candidatesByOksId,
@@ -183,16 +194,9 @@ public class OksGrouper {
             throw new IllegalStateException("Пустая группа после фильтрации");
         }
 
-        // Общий tie-in: для камерной группы — первый кандидат (все указывают
-        // на одну камеру). Для радиусной — тоже первый (представительный).
-        TieInCandidate sharedTieIn = candidates.get(0);
-
-        return new OksGroup(points, candidates, sharedTieIn, byChamber);
+        return new OksGroup(points, candidates, candidates.get(0), byChamber);
     }
 
-    /**
-     * Конвертирует tie-in точку кандидата из WGS84 в UTM.
-     */
     private Coordinate toUtmCoordinate(TieInCandidate candidate) {
         Point wgs84 = GEOMETRY_FACTORY.createPoint(
                 new Coordinate(candidate.getTieInLongitude(),

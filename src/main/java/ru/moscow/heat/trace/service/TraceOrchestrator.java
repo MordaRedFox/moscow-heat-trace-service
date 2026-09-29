@@ -38,28 +38,31 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Главный сценарий трассировки одной загрузки (итерация 6).
- * <p>
- * Конвейер на загрузку:
- * <ol>
- *     <li>Построение {@link ObstacleModel} и {@link VisibilityGraph};</li>
- *     <li>Подбор кандидатов врезки для всех ОКС;</li>
- *     <li>{@link OksGrouper}: группировка ОКС по общему тай-ину;</li>
- *     <li>Для каждой много-ОКС группы:
- *         {@link TreeRouter} → (проверка углов) →
- *         {@link FlowAggregator} → {@link TreeDiameterAssigner} →
- *         {@link TreeRouteSegmentSplitter}. При любой ошибке
- *         (дерево не построено / угол / сходимость ДУ / иное) —
- *         fallback на поштучную обработку группы.</li>
- *     <li>Для одиночных ОКС: линейный пайплайн
- *         (A* → simplify → angle → split → diameter → validate);</li>
- *     <li>Сборка {@link TraceResult}.</li>
- * </ol>
+ * Главный сценарий трассировки одной загрузки (итерации 6–7).
+ *
+ * <p>Поддерживает три стратегии формирования варианта:
+ * <ul>
+ *   <li>{@link TraceStrategy#MAIN} — группировка ОКС и лучший кандидат врезки;</li>
+ *   <li>{@link TraceStrategy#NO_GROUP} — каждый ОКС отдельно, лучший кандидат;</li>
+ *   <li>{@link TraceStrategy#ALT_TIE_IN} — группировка, альтернативный кандидат
+ *       (второй в списке, если есть).</li>
+ * </ul>
+ *
+ * <p>Все три стратегии используют полный конвейер: A* по visibility graph,
+ * RouteSimplifier, AngleChecker, разбиение на сегменты, назначение ДУ,
+ * проверку предельной длины. Никаких прямых линий в обход препятствий.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class TraceOrchestrator {
+
+    /** Стратегия формирования варианта. */
+    public enum TraceStrategy {
+        MAIN,
+        NO_GROUP,
+        ALT_TIE_IN
+    }
 
     private static final GeometryFactory GEOMETRY_FACTORY = new GeometryFactory();
     private static final int WGS84_SRID = 4326;
@@ -75,7 +78,6 @@ public class TraceOrchestrator {
     private final DiameterAssigner diameterAssigner;
     private final LengthValidator lengthValidator;
 
-    // === Сервисы итерации 6 ===
     private final OksGrouper oksGrouper;
     private final TreeRouter treeRouter;
     private final FlowAggregator flowAggregator;
@@ -83,16 +85,27 @@ public class TraceOrchestrator {
     private final TreeRouteSegmentSplitter treeRouteSegmentSplitter;
 
     /**
-     * Выполняет расчёт трассировки для загрузки.
+     * Основной запуск (стратегия MAIN). Используется в тестах и в одиночных вызовах.
      *
      * @param uploadId id загрузки
-     * @return {@link TraceResult}
+     * @return результат трассировки (одна стратегия)
      */
     public TraceResult run(UUID uploadId) {
+        return run(uploadId, TraceStrategy.MAIN);
+    }
+
+    /**
+     * Запуск трассировки с заданной стратегией.
+     *
+     * @param uploadId id загрузки
+     * @param strategy стратегия формирования варианта
+     * @return результат трассировки
+     */
+    public TraceResult run(UUID uploadId, TraceStrategy strategy) {
         List<OksConnectionPointEntity> oksPoints =
                 oksRepository.findByUploadId(uploadId);
-        log.info("Трассировка uploadId={}: {} перспективных ОКС",
-                uploadId, oksPoints.size());
+        log.info("Трассировка uploadId={}, strategy={}: {} ОКС",
+                uploadId, strategy, oksPoints.size());
 
         ObstacleModel obstacleModel = obstacleModelBuilder.build(uploadId);
         VisibilityGraph graph = new VisibilityGraph(obstacleModel);
@@ -105,6 +118,8 @@ public class TraceOrchestrator {
         List<UnconnectedOks> unconnected = new ArrayList<>();
         Map<String, TieInCandidate> selectedCandidates = new HashMap<>();
 
+        boolean useAlt = (strategy == TraceStrategy.ALT_TIE_IN);
+
         for (OksConnectionPointEntity oks : oksPoints) {
             List<TieInCandidate> candidates =
                     allCandidates.get(oks.getFeatureId());
@@ -112,13 +127,19 @@ public class TraceOrchestrator {
                 unconnected.add(new UnconnectedOks(oks.getFeatureId(),
                         UnconnectedOks.Reason.NO_TIE_IN_CANDIDATE,
                         "TieInCandidateService не вернул кандидатов"));
-            } else {
-                validOks.add(oks);
-                selectedCandidates.put(oks.getFeatureId(), candidates.get(0));
+                continue;
             }
+            TieInCandidate chosen = candidates.get(0);
+            if (useAlt && candidates.size() > 1) {
+                chosen = candidates.get(1);
+            }
+            validOks.add(oks);
+            selectedCandidates.put(oks.getFeatureId(), chosen);
         }
 
-        List<OksGroup> groups = oksGrouper.group(validOks, selectedCandidates);
+        boolean noGroup = (strategy == TraceStrategy.NO_GROUP);
+        List<OksGroup> groups = oksGrouper.group(
+                validOks, selectedCandidates, noGroup);
 
         List<RouteSegment> allSegments = new ArrayList<>();
         List<TechnicalNode> allTechnicalNodes = new ArrayList<>();
@@ -136,8 +157,7 @@ public class TraceOrchestrator {
                             allSegments, allTechnicalNodes,
                             allNewChambers, unconnected);
                 } catch (Exception e) {
-                    log.error("Непредвиденная ошибка при обработке группы "
-                                    + "из {} ОКС: {}",
+                    log.error("Ошибка обработки группы из {} ОКС: {}",
                             group.size(), e.getMessage(), e);
                     fallbackToIndividual(group, uploadId,
                             obstacleModel, graph,
@@ -159,10 +179,9 @@ public class TraceOrchestrator {
             }
         }
 
-        log.info("Трассировка завершена: {} групп ({} много-ОКС, "
-                        + "{} fallback), {} сегментов, {} камер, "
-                        + "{} неподключённых",
-                groups.size(), multiGroupCount, fallbackCount,
+        log.info("Трассировка {}: {} групп ({} много-ОКС, {} fallback), "
+                        + "{} сегментов, {} камер, {} неподключённых",
+                strategy, groups.size(), multiGroupCount, fallbackCount,
                 allSegments.size(), allNewChambers.size(),
                 unconnected.size());
 
@@ -176,16 +195,21 @@ public class TraceOrchestrator {
                 allTechnicalNodes, unconnected, counters);
     }
 
-    // ================================================================
-    // Групповой пайплайн
-    // ================================================================
-
     /**
-     * Обрабатывает группу из нескольких ОКС через дерево маршрутов.
-     * При любой ошибке — fallback на поштучную обработку.
+     * Запускает все три стратегии. Используется в async-процессоре для
+     * формирования полного набора вариантов.
      *
-     * @return {@code true}, если группа обработана как дерево
+     * @param uploadId id загрузки
+     * @return список результатов: [MAIN, NO_GROUP, ALT_TIE_IN]
      */
+    public List<TraceResult> runAll(UUID uploadId) {
+        List<TraceResult> results = new ArrayList<>();
+        results.add(run(uploadId, TraceStrategy.MAIN));
+        results.add(run(uploadId, TraceStrategy.NO_GROUP));
+        results.add(run(uploadId, TraceStrategy.ALT_TIE_IN));
+        return results;
+    }
+
     private boolean processGroup(OksGroup group, UUID uploadId,
                                  ObstacleModel obstacleModel,
                                  VisibilityGraph graph,
@@ -194,7 +218,6 @@ public class TraceOrchestrator {
                                  List<NewChamber> allChambers,
                                  List<UnconnectedOks> unconnected) {
 
-        // Шаг 2: построение дерева
         RouteTree tree = treeRouter.buildTree(group, uploadId, graph,
                 obstacleModel);
         if (tree == null) {
@@ -205,7 +228,6 @@ public class TraceOrchestrator {
             return false;
         }
 
-        // Шаг 2б: проверка углов пересечения по рёбрам дерева
         String angleViolation = checkTreeAngles(tree, obstacleModel);
         if (angleViolation != null) {
             log.warn("Группа {} ОКС: {} — поштучная обработка",
@@ -215,7 +237,6 @@ public class TraceOrchestrator {
             return false;
         }
 
-        // Шаги 3–4: агрегация расходов и назначение ДУ
         try {
             flowAggregator.aggregate(tree, group);
             treeDiameterAssigner.assign(tree);
@@ -228,7 +249,6 @@ public class TraceOrchestrator {
             return false;
         }
 
-        // Шаг 5: разбиение на сегменты + камеры ветвлений и корня
         TreeRouteSegmentSplitter.SplitResult splitResult =
                 treeRouteSegmentSplitter.split(tree, obstacleModel,
                         group.getSharedTieIn());
@@ -236,20 +256,9 @@ public class TraceOrchestrator {
         allSegments.addAll(splitResult.getSegments());
         allTechNodes.addAll(splitResult.getTechnicalNodes());
         allChambers.addAll(splitResult.getNewChambers());
-
-        log.debug("Группа {} ОКС: дерево={}, сегментов={}, камер={}",
-                group.size(), tree,
-                splitResult.getSegments().size(),
-                splitResult.getNewChambers().size());
-
         return true;
     }
 
-    /**
-     * Fallback: обрабатывает каждый ОКС группы независимо через
-     * линейный пайплайн. Используется при любой ошибке группового
-     * расчёта — сервис не должен терять точки из-за одной проблемы.
-     */
     private void fallbackToIndividual(OksGroup group, UUID uploadId,
                                       ObstacleModel obstacleModel,
                                       VisibilityGraph graph,
@@ -264,10 +273,6 @@ public class TraceOrchestrator {
                     allSegments, allTechNodes, allChambers, unconnected);
         }
     }
-
-    // ================================================================
-    // Линейный пайплайн (одиночные ОКС)
-    // ================================================================
 
     private void processOne(OksConnectionPointEntity oks,
                             TieInCandidate candidate,
@@ -358,14 +363,6 @@ public class TraceOrchestrator {
         }
     }
 
-    // ================================================================
-    // Проверка углов
-    // ================================================================
-
-    /**
-     * Проверка углов пересечения по всем рёбрам дерева. Возвращает
-     * описание первого нарушения или {@code null}, если всё в порядке.
-     */
     private String checkTreeAngles(RouteTree tree,
                                     ObstacleModel obstacleModel) {
         for (TreeEdge edge : tree.getEdges()) {
