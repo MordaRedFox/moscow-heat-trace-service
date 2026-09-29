@@ -7,18 +7,13 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import ru.moscow.heat.trace.model.TraceResult;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
- * Асинхронная обработка трассировки — по образцу {@code GeoJsonAsyncProcessor}:
- * статус сессии обновляется на каждом переходе, ошибки не теряются молча.
- * <p>
- * Пул потоков переиспользует {@code geoJsonTaskExecutor} из
- * {@code AsyncConfig} (2-4 потока). Трассировка (A*, O(n^2) видимость)
- * потенциально тяжелее по CPU, чем парсинг GeoJSON — если в профилировании
- * окажется, что расчёты трассировки блокируют очередь загрузок (или
- * наоборот), стоит завести отдельный executor "traceTaskExecutor" в
- * {@code AsyncConfig} и переключить аннотацию ниже на него.
+ * Асинхронная обработка трассировки: запускает все три стратегии
+ * ({@link TraceOrchestrator#runAll(UUID)}), передаёт список результатов
+ * в {@link TraceService#markCompleted(UUID, List)}.
  */
 @Slf4j
 @Service
@@ -31,8 +26,8 @@ public class TraceAsyncProcessor {
     /**
      * Запускает расчёт трассировки в отдельном потоке.
      *
-     * @param traceId  id сессии трассировки (для обновления статуса)
-     * @param uploadId id загрузки, по которой считаем маршрут
+     * @param traceId  id сессии трассировки
+     * @param uploadId id загрузки
      */
     @Async("geoJsonTaskExecutor")
     public void process(UUID traceId, UUID uploadId) {
@@ -41,11 +36,16 @@ public class TraceAsyncProcessor {
         try {
             traceService.markProcessing(traceId);
 
-            TraceResult result = traceOrchestrator.run(uploadId);
+            List<TraceResult> results = traceOrchestrator.runAll(uploadId);
 
-            traceService.markCompleted(traceId, result);
-            log.info("Трассировка traceId={} завершена: {} сегментов, {} неподключённых ОКС",
-                    traceId, result.getSegments().size(), result.getUnconnectedOks().size());
+            traceService.markCompleted(traceId, results);
+
+            TraceResult main = results.isEmpty() ? null : results.get(0);
+            int segs = main != null ? main.getSegments().size() : 0;
+            int unconn = main != null ? main.getUnconnectedOks().size() : 0;
+            log.info("Трассировка traceId={} завершена: {} вариантов, "
+                            + "main: {} сегментов, {} неподключённых",
+                    traceId, results.size(), segs, unconn);
         } catch (Exception e) {
             log.error("Ошибка трассировки traceId={}", traceId, e);
             traceService.markFailed(traceId, truncate(e.getMessage(), 3900));
@@ -55,15 +55,9 @@ public class TraceAsyncProcessor {
         }
     }
 
-    /**
-     * Обрезает сообщение об ошибке до максимальной длины (тот же приём,
-     * что и в {@code GeoJsonAsyncProcessor.truncate}, чтобы влезало в
-     * колонку/поле {@code error_message}, если оно когда-нибудь появится
-     * в персистентном хранилище сессий трассировки).
-     */
     private String truncate(String s, int max) {
         if (s == null) {
-            return "Трассировка завершилась с ошибкой без сообщения (" + "см. логи по traceId)";
+            return "Трассировка завершилась с ошибкой без сообщения";
         }
         return s.length() <= max ? s : s.substring(0, max);
     }

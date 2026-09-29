@@ -81,4 +81,22 @@ class CoordinateTransformServiceTest {
         assertEquals(point.getCoordinate().y,
                 back.getCoordinate().y, 1e-7);
     }
+
+    @Test
+    void toWgs84IdempotentWhenAlreadyWgs84() {
+        Point point = geometryFactory.createPoint(
+                new Coordinate(KREMLIN_LON, KREMLIN_LAT));
+        point.setSRID(4326);
+        Geometry res = service.toWgs84(point);
+        assertEquals(CoordinateTransformService.SRID_WGS84, res.getSRID());
+        assertEquals(KREMLIN_LON, res.getCoordinate().x, 1e-7);
+        assertEquals(KREMLIN_LAT, res.getCoordinate().y, 1e-7);
+
+        // Также проверяем без явного SRID, но по диапазону координат
+        Point noSridPoint = geometryFactory.createPoint(
+                new Coordinate(KREMLIN_LON, KREMLIN_LAT));
+        Geometry resNoSrid = service.toWgs84(noSridPoint);
+        assertEquals(KREMLIN_LON, resNoSrid.getCoordinate().x, 1e-7);
+        assertEquals(KREMLIN_LAT, resNoSrid.getCoordinate().y, 1e-7);
+    }
 }

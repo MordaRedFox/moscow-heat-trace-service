@@ -77,7 +77,8 @@ public class RouteSimplifier {
                                     ObstacleModel obstacleModel,
                                     Set<Long> ignoredForbiddenIds) {
         LineString segment = shrunkSegment(a, b);
-        Envelope env = segment.getEnvelopeInternal();
+        LineString rawSeg = GEOMETRY_FACTORY.createLineString(new Coordinate[]{a, b});
+        Envelope env = rawSeg.getEnvelopeInternal();
         for (ObstacleModel.ForbiddenZone zone : obstacleModel.findForbiddenNear(env)) {
             Long id = zone.getSourceRestrictionId();
             if (id != null && ignoredForbiddenIds.contains(id)) {
@@ -86,6 +87,17 @@ public class RouteSimplifier {
             if (!env.intersects(zone.getEnvelope())) {
                 continue;
             }
+            // 1. Физическое тело здания / препятствия: пересечение категорически запрещено
+            if (zone.getPreparedSourceGeometry() != null) {
+                if (zone.getPreparedSourceGeometry().intersects(rawSeg)) {
+                    return false;
+                }
+            } else if (zone.getSourceGeometryUtm() != null) {
+                if (zone.getSourceGeometryUtm().intersects(rawSeg)) {
+                    return false;
+                }
+            }
+            // 2. Буферная зона: транзитное пересечение запрещено
             if (zone.getPreparedGeometry().crosses(segment)) {
                 return false;
             }

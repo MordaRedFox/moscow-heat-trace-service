@@ -157,6 +157,14 @@ public class RouteSegmentSplitter {
         breakpoints.add(0.0);
         breakpoints.add(totalLength);
 
+        // Вершины исходного пути (углы поворота трассы при обходе препятствий)
+        for (Coordinate c : fullPath.getCoordinates()) {
+            double d = indexedLine.indexOf(c);
+            if (d >= 0.0 && d <= totalLength) {
+                breakpoints.add(d);
+            }
+        }
+
         for (ObstacleModel.SpecialZone zone : obstacleModel.getSpecialZones()) {
             Geometry intersection = fullPath.intersection(zone.getBufferedGeometryUtm());
             if (intersection.isEmpty()) {

@@ -6,33 +6,49 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import ru.moscow.heat.geojson.exception.UploadNotFoundException;
 import ru.moscow.heat.geojson.repository.UploadSessionRepository;
 import ru.moscow.heat.trace.dto.TieInCandidate;
 import ru.moscow.heat.trace.dto.TieInType;
 import ru.moscow.heat.trace.dto.TraceAcceptedResponse;
+import ru.moscow.heat.trace.dto.TraceResult;
 import ru.moscow.heat.trace.dto.TraceStatus;
 import ru.moscow.heat.trace.dto.TraceStatusResponse;
+import ru.moscow.heat.trace.dto.VariantResult;
+import ru.moscow.heat.trace.dto.VariantSummary;
 import ru.moscow.heat.trace.exception.TraceNotFoundException;
-import ru.moscow.heat.trace.model.TraceResult;
+import ru.moscow.heat.trace.exception.VariantNotFoundException;
 import ru.moscow.heat.trace.model.UnconnectedOks;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
  * Модульные тесты сервиса {@link TraceService}.
- * Репозиторий сессий и сервис кандидатов подменяются моками
- * <p>
- * Для итерации 5 добавлены проверки новых переходов статуса:
- * {@link TraceService#markProcessing}, {@link TraceService#markCompleted},
- * {@link TraceService#markFailed}. Сессия создаётся сразу в {@code PENDING} -
- * заглушка {@code NOT_IMPLEMENTED} из итерации 3 больше не используется
+ *
+ * <p>Соответствует актуальной реализации:
+ * <ul>
+ *   <li>конструктор — {@code (UploadSessionRepository, TieInCandidateService,
+ *       TraceGeoJsonExporter, TraceResultMapper)};</li>
+ *   <li>{@code markCompleted(UUID, List<model.TraceResult>)} принимает
+ *       список результатов оркестратора (MAIN / NO_GROUP / ALT_TIE_IN);</li>
+ *   <li>публичный результат доступен через
+ *       {@code getVariantsTraceResult(UUID)} (DTO {@code TraceResult}).</li>
+ * </ul>
+ *
+ * <p>Важно: {@link TraceResultMapper} инжектируется мок-бином, потому что
+ * сервис использует его для конвертации в DTO; фактическая конвертация
+ * покрывается отдельными тестами маппера.
  */
 @ExtendWith(MockitoExtension.class)
 @DisplayName("Модульные тесты TraceService")
@@ -44,13 +60,21 @@ class TraceServiceTest {
     @Mock
     private TieInCandidateService tieInCandidateService;
 
+    @Mock
+    private TraceGeoJsonExporter traceGeoJsonExporter;
+
+    @Mock
+    private TraceResultMapper traceResultMapper;
+
     private TraceService traceService;
 
     @BeforeEach
     void setUp() {
         traceService = new TraceService(
                 uploadSessionRepository,
-                tieInCandidateService);
+                tieInCandidateService,
+                traceGeoJsonExporter,
+                traceResultMapper);
     }
 
     @Test
@@ -125,15 +149,23 @@ class TraceServiceTest {
         UUID traceId = traceService.createTraceSession(uploadId)
                 .getTraceId();
 
-        TraceResult.SummaryCounters counters =
-                new TraceResult.SummaryCounters(5, 4, 1);
+        ru.moscow.heat.trace.model.TraceResult.SummaryCounters counters =
+                new ru.moscow.heat.trace.model.TraceResult.SummaryCounters(5, 4, 1);
         UnconnectedOks unconnected = new UnconnectedOks(
-                "oks-5", UnconnectedOks.Reason.NO_PATH_IN_GRAPH, "нет пути");
-        TraceResult result = new TraceResult(
-                List.of(), List.of(), List.of(),
-                List.of(unconnected), counters);
+                "oks-5",
+                UnconnectedOks.Reason.NO_PATH_IN_GRAPH,
+                "нет пути");
+        ru.moscow.heat.trace.model.TraceResult modelResult =
+                new ru.moscow.heat.trace.model.TraceResult(
+                        List.of(), List.of(), List.of(),
+                        List.of(unconnected), counters);
 
-        traceService.markCompleted(traceId, result);
+        when(traceResultMapper.toTraceResult(
+                eq(uploadId), any(UUID.class), anyList()))
+                .thenReturn(new TraceResult(
+                        traceId, uploadId, List.of(), List.of()));
+
+        traceService.markCompleted(traceId, List.of(modelResult));
 
         TraceStatusResponse status = traceService.getTraceStatus(traceId);
         assertThat(status.getStatus()).isEqualTo(TraceStatus.COMPLETED);
@@ -143,8 +175,6 @@ class TraceServiceTest {
         assertThat(status.getUnconnectedOksFeatureIds())
                 .containsExactly("oks-5");
         assertThat(status.getCompletedAt()).isNotNull();
-
-        assertThat(traceService.getTraceResult(traceId)).isSameAs(result);
     }
 
     @Test
@@ -213,5 +243,80 @@ class TraceServiceTest {
                 () -> traceService.getCandidates(unknownTraceId))
                 .isInstanceOf(TraceNotFoundException.class)
                 .hasMessageContaining("не найдена");
+    }
+
+    @Test
+    @DisplayName("Получение списка вариантов для выполненной задачи")
+    void shouldReturnVariantsWhenTraceExists() {
+        UUID uploadId = UUID.randomUUID();
+        when(uploadSessionRepository.existsById(uploadId)).thenReturn(true);
+
+        VariantSummary summary = new VariantSummary(
+                "v1", 1,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                0, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                50.0, 1.0,
+                List.of()
+        );
+        VariantResult variant = new VariantResult(
+                "v1", List.of(), List.of(), List.of(), List.of(), summary);
+
+        when(traceResultMapper.toTraceResult(
+                eq(uploadId), any(UUID.class), anyList()))
+                .thenReturn(new TraceResult(
+                        UUID.randomUUID(), uploadId,
+                        List.of(variant), List.of()));
+
+        UUID traceId = traceService.createTraceSession(uploadId).getTraceId();
+        traceService.markCompleted(traceId, List.of());
+
+        List<VariantSummary> summaries = traceService.getVariants(traceId);
+
+        assertThat(summaries).hasSize(1);
+        assertThat(summaries.get(0).getVariantId()).isEqualTo("v1");
+        assertThat(summaries.get(0).getRank()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Потоковый экспорт конкретного варианта и всех вариантов")
+    void shouldExportVariantsStreaming() {
+        UUID uploadId = UUID.randomUUID();
+        when(uploadSessionRepository.existsById(uploadId)).thenReturn(true);
+
+        VariantSummary summary = new VariantSummary(
+                "v1", 1,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                0, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                50.0, 1.0,
+                List.of()
+        );
+        VariantResult variant = new VariantResult(
+                "v1", List.of(), List.of(), List.of(), List.of(), summary);
+
+        when(traceResultMapper.toTraceResult(
+                eq(uploadId), any(UUID.class), anyList()))
+                .thenReturn(new TraceResult(
+                        UUID.randomUUID(), uploadId,
+                        List.of(variant), List.of()));
+
+        StreamingResponseBody mockBody = out -> {};
+        when(traceGeoJsonExporter.exportVariantStreaming(variant))
+                .thenReturn(mockBody);
+        when(traceGeoJsonExporter.exportAllVariantsStreaming(any()))
+                .thenReturn(mockBody);
+
+        UUID traceId = traceService.createTraceSession(uploadId).getTraceId();
+        traceService.markCompleted(traceId, List.of());
+
+        StreamingResponseBody vBody = traceService.exportTrace(traceId, "v1");
+        assertThat(vBody).isNotNull();
+
+        StreamingResponseBody allBody = traceService.exportTrace(traceId, null);
+        assertThat(allBody).isNotNull();
+
+        assertThatThrownBy(() -> traceService.exportTrace(traceId, "v99"))
+                .isInstanceOf(VariantNotFoundException.class);
     }
 }

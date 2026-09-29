@@ -117,6 +117,64 @@ class RouteSimplifierTest {
         assertThat(result.get(1).x).isEqualTo(300.0);
     }
 
+    @Test
+    @DisplayName("Диагональ между углами препятствия не срезается сквозь внутренность")
+    void diagonalAcrossCornersCannotShortcut() {
+        Polygon obstacle = rectangle(0, 0, 100, 100);
+        ObstacleModel model = new ObstacleModel(
+                List.of(new ObstacleModel.ForbiddenZone(1L, obstacle, obstacle)),
+                Collections.emptyList());
+
+        // Путь огибает препятствие по двум сторонам: (0, 0) -> (100, 0) -> (100, 100)
+        List<Coordinate> raw = List.of(
+                new Coordinate(0, 0),
+                new Coordinate(100, 0),
+                new Coordinate(100, 100)
+        );
+
+        List<Coordinate> result = simplifier.simplify(raw, model, Set.of());
+
+        // Срезание по диагонали (0,0) -> (100,100) проходит сквозь тело препятствия,
+        // поэтому угол (100, 0) обязан сохраниться
+        assertThat(result).hasSize(3);
+        assertThat(result.get(1)).isEqualTo(new Coordinate(100, 0));
+    }
+
+    @Test
+    @DisplayName("Здание с внутренним двором: путь не срезается сквозь стены здания")
+    void donutCourtyardBuildingCannotShortcut() {
+        LinearRing outer = GF.createLinearRing(new Coordinate[]{
+                new Coordinate(0, 0),
+                new Coordinate(100, 0),
+                new Coordinate(100, 100),
+                new Coordinate(0, 100),
+                new Coordinate(0, 0)
+        });
+        LinearRing inner = GF.createLinearRing(new Coordinate[]{
+                new Coordinate(20, 20),
+                new Coordinate(80, 20),
+                new Coordinate(80, 80),
+                new Coordinate(20, 80),
+                new Coordinate(20, 20)
+        });
+        Polygon donutObstacle = GF.createPolygon(outer, new LinearRing[]{inner});
+        ObstacleModel model = new ObstacleModel(
+                List.of(new ObstacleModel.ForbiddenZone(2L, donutObstacle, donutObstacle)),
+                Collections.emptyList());
+
+        // Путь огибает внешние стены: (0, -10) -> (110, -10) -> (110, 110)
+        List<Coordinate> raw = List.of(
+                new Coordinate(0, -10),
+                new Coordinate(110, -10),
+                new Coordinate(110, 110)
+        );
+
+        List<Coordinate> result = simplifier.simplify(raw, model, Set.of());
+
+        assertThat(result).hasSize(3);
+        assertThat(result.get(1)).isEqualTo(new Coordinate(110, -10));
+    }
+
     private Polygon rectangle(double minX, double minY,
                                double maxX, double maxY) {
         LinearRing ring = GF.createLinearRing(new Coordinate[]{

@@ -1,48 +1,74 @@
 package ru.moscow.heat.trace.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Point;
 
 import java.util.Objects;
 
 /**
- * Кандидат на присоединение новой тепловой сети к существующей
- * для одной точки подключения ОКС
- * <p>Кандидат описывает либо врезку в существующую тепловую камеру
- * ({@link TieInType#EXISTING_CHAMBER}), либо строительство новой
- * камеры на выбранном участке сети
- * ({@link TieInType#NEW_CHAMBER}). Отдельный объект {@code tie_in}
- * не формируется: присоединение всегда идёт через тепловую камеру
- * <p>Координаты кандидата разделены на два смысловых поля:
- * <ul>
- *     <li>{@code tieInLongitude}/{@code tieInLatitude} — точка
- *     присоединения <b>на существующей сети</b>, результат
- *     {@code GeometryUtils.nearestPointOnGeometry}. Для отладки
- *     и для расчёта расстояний;</li>
- *     <li>{@code targetLongitude}/{@code targetLatitude} — фактическая
- *     конечная точка маршрута. Для {@link TieInType#EXISTING_CHAMBER}
- *     это координаты <b>камеры</b> (ТП, п. 2.4: «Новый участок сети
- *     заканчивается в ней»), для {@link TieInType#NEW_CHAMBER} —
- *     точка на сети, где создаётся новая камера.</li>
- * </ul>
- * Именно {@code targetXxx} используется {@code TraceOrchestrator}
- * как {@code endUtm} при поиске пути
+ * Кандидат на присоединение новой сети к существующей
  */
-@Schema(description = "Кандидат на присоединение")
+@Schema(description = "Кандидат на присоединение новой сети к существующей")
 public final class TieInCandidate {
 
+    private static final GeometryFactory GF = new GeometryFactory();
+
+    @Schema(description = "Уникальный идентификатор кандидата",
+            example = "cand_oks_1_ch_42")
     private final String id;
+
+    @Schema(description = "Идентификатор точки подключения ОКС",
+            example = "oks_point_1")
     private final String connectionPointId;
+
+    @Schema(description = "Идентификатор участка существующей сети",
+            example = "heat_net_105")
     private final String heatNetworkId;
+
+    @Schema(description = "Тип присоединения")
     private final TieInType type;
+
+    @Schema(description = "Идентификатор существующей камеры (только для EXISTING_CHAMBER)",
+            example = "heat_chamber_42")
     private final String existingChamberId;
+
+    @Schema(description = "Долгота точки присоединения на сети в WGS 84 (EPSG:4326)",
+            example = "37.6175")
     private final double tieInLongitude;
+
+    @Schema(description = "Широта точки присоединения на сети в WGS 84 (EPSG:4326)",
+            example = "55.7522")
     private final double tieInLatitude;
+
+    @Schema(description = "Долгота целевой точки маршрута в WGS 84 (EPSG:4326)",
+            example = "37.6176")
     private final double targetLongitude;
+
+    @Schema(description = "Широта целевой точки маршрута в WGS 84 (EPSG:4326)",
+            example = "55.7523")
     private final double targetLatitude;
+
+    @Schema(description = "Расстояние от точки подключения до сети, м",
+            example = "35.4")
     private final double distanceToNetworkM;
+
+    @Schema(description = "Расстояние до существующей камеры, м (0 для NEW_CHAMBER)",
+            example = "7.8")
     private final double distanceToChamberM;
+
+    @Schema(description = "Текущее число примыканий к камере",
+            example = "2")
     private final int currentAttachments;
+
+    @Schema(description = "Ориентировочная стоимость присоединения, руб.",
+            example = "5000000")
     private final long cost;
+
+    @Schema(description = "ДУ новой камеры (только для NEW_CHAMBER), мм",
+            example = "300")
     private final Integer newChamberDiameter;
 
     private TieInCandidate(Builder b) {
@@ -87,6 +113,12 @@ public final class TieInCandidate {
         return type;
     }
 
+    /** @return тип присоединения (синоним для обратной совместимости) */
+    @JsonIgnore
+    public TieInType getTieInType() {
+        return type;
+    }
+
     /** @return идентификатор существующей камеры либо {@code null} */
     public String getExistingChamberId() {
         return existingChamberId;
@@ -120,6 +152,18 @@ public final class TieInCandidate {
         return targetLatitude;
     }
 
+    /** @return геометрия точки присоединения на сети */
+    @JsonIgnore
+    public Point getTieInPoint() {
+        return GF.createPoint(new Coordinate(tieInLongitude, tieInLatitude));
+    }
+
+    /** @return геометрия целевой точки маршрута */
+    @JsonIgnore
+    public Point getTargetPoint() {
+        return GF.createPoint(new Coordinate(targetLongitude, targetLatitude));
+    }
+
     /** @return расстояние от точки подключения до сети, м */
     public double getDistanceToNetworkM() {
         return distanceToNetworkM;
@@ -135,6 +179,12 @@ public final class TieInCandidate {
         return currentAttachments;
     }
 
+    /** @return текущее число примыканий у камеры (синоним для обратной совместимости) */
+    @JsonIgnore
+    public Integer getCurrentChamberConnections() {
+        return currentAttachments;
+    }
+
     /** @return стоимость присоединения, руб. */
     public long getCost() {
         return cost;
@@ -142,6 +192,12 @@ public final class TieInCandidate {
 
     /** @return ДУ новой камеры либо {@code null} */
     public Integer getNewChamberDiameter() {
+        return newChamberDiameter;
+    }
+
+    /** @return ДУ новой камеры (синоним для обратной совместимости) */
+    @JsonIgnore
+    public Integer getRequiredChamberDiameter() {
         return newChamberDiameter;
     }
 
@@ -241,6 +297,11 @@ public final class TieInCandidate {
             return this;
         }
 
+        public Builder tieInType(TieInType type) {
+            this.type = type;
+            return this;
+        }
+
         public Builder existingChamberId(String existingChamberId) {
             this.existingChamberId = existingChamberId;
             return this;
@@ -256,6 +317,14 @@ public final class TieInCandidate {
             return this;
         }
 
+        public Builder tieInPoint(Point point) {
+            if (point != null) {
+                this.tieInLongitude = point.getX();
+                this.tieInLatitude = point.getY();
+            }
+            return this;
+        }
+
         public Builder targetLongitude(double targetLongitude) {
             this.targetLongitude = targetLongitude;
             return this;
@@ -263,6 +332,14 @@ public final class TieInCandidate {
 
         public Builder targetLatitude(double targetLatitude) {
             this.targetLatitude = targetLatitude;
+            return this;
+        }
+
+        public Builder targetPoint(Point point) {
+            if (point != null) {
+                this.targetLongitude = point.getX();
+                this.targetLatitude = point.getY();
+            }
             return this;
         }
 
@@ -281,13 +358,28 @@ public final class TieInCandidate {
             return this;
         }
 
+        public Builder currentChamberConnections(Integer conns) {
+            this.currentAttachments = conns != null ? conns : 0;
+            return this;
+        }
+
         public Builder cost(long cost) {
             this.cost = cost;
             return this;
         }
 
+        public Builder cost(double cost) {
+            this.cost = (long) cost;
+            return this;
+        }
+
         public Builder newChamberDiameter(Integer newChamberDiameter) {
             this.newChamberDiameter = newChamberDiameter;
+            return this;
+        }
+
+        public Builder requiredChamberDiameter(Integer diam) {
+            this.newChamberDiameter = diam;
             return this;
         }
 

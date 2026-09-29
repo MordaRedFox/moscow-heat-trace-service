@@ -38,6 +38,14 @@ public class CoordinateTransformService {
      * сохраняя тип геометрии и проставляя SRID 32637
      */
     public Geometry toUtm(Geometry wgs84Geometry) {
+        if (wgs84Geometry == null) return null;
+        if (wgs84Geometry.getSRID() == SRID_UTM_37N) {
+            return wgs84Geometry;
+        }
+        org.locationtech.jts.geom.Coordinate c = wgs84Geometry.getCoordinate();
+        if (c != null && (Math.abs(c.x) > 180.0 || Math.abs(c.y) > 90.0)) {
+            return wgs84Geometry;
+        }
         return transform(wgs84Geometry, toUtmTransform, SRID_UTM_37N);
     }
 
@@ -45,6 +53,14 @@ public class CoordinateTransformService {
      * Обратная трансформация из EPSG:32637 в EPSG:4326 (SRID 4326)
      */
     public Geometry toWgs84(Geometry utmGeometry) {
+        if (utmGeometry == null) return null;
+        if (utmGeometry.getSRID() == SRID_WGS84) {
+            return utmGeometry;
+        }
+        org.locationtech.jts.geom.Coordinate c = utmGeometry.getCoordinate();
+        if (c != null && Math.abs(c.x) <= 180.0 && Math.abs(c.y) <= 90.0) {
+            return utmGeometry;
+        }
         return transform(utmGeometry, toWgs84Transform, SRID_WGS84);
     }
 

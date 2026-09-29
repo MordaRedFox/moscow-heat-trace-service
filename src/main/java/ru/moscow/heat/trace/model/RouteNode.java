@@ -1,32 +1,26 @@
 package ru.moscow.heat.trace.model;
 
+import lombok.EqualsAndHashCode;
+import lombok.ToString;
 import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Point;
 
 import java.util.Objects;
 import java.util.UUID;
 
 /**
  * Узел маршрута новой тепловой сети.
- * <p>
- * Координата — UTM zone 37N (EPSG:32637), метры, как и {@code RouteSegment.geometryUtm}
- * и весь граф видимости ({@code AbstractGeoObject.geometryUtm} уже хранит
- * метрическую геометрию, поэтому внутренний конвейер трассировки работает
- * в UTM целиком; конвертация в WGS84 для GeoJSON-выгрузки — задача итерации 6-7).
- * <p>
- * Иммутабельный DTO — по аналогии с {@code TieInCandidate} из итерации 4.
  */
+@ToString
+@EqualsAndHashCode
 public final class RouteNode {
+
+    private static final GeometryFactory GF = new GeometryFactory();
 
     private final UUID id;
     private final RouteNodeType type;
     private final Coordinate coordinateUtm;
-
-    /**
-     * feature_id исходного доменного объекта, если узел ему соответствует
-     * (например, connection_point_id ОКС или feature_id существующей
-     * камеры). {@code null} для чисто геометрических узлов (CORNER,
-     * TECHNICAL_NODE, NEW_CHAMBER до сохранения в БД).
-     */
     private final String sourceFeatureId;
 
     public RouteNode(UUID id, RouteNodeType type, Coordinate coordinateUtm, String sourceFeatureId) {
@@ -34,6 +28,31 @@ public final class RouteNode {
         this.type = Objects.requireNonNull(type, "type");
         this.coordinateUtm = Objects.requireNonNull(coordinateUtm, "coordinateUtm");
         this.sourceFeatureId = sourceFeatureId;
+    }
+
+    public RouteNode(String id, String sourceFeatureId, Point point, String nodeType) {
+        UUID parsedId;
+        try {
+            parsedId = id != null ? UUID.fromString(id) : UUID.randomUUID();
+        } catch (Exception e) {
+            parsedId = id != null ? UUID.nameUUIDFromBytes(id.getBytes(java.nio.charset.StandardCharsets.UTF_8)) : UUID.randomUUID();
+        }
+        this.id = parsedId;
+        this.sourceFeatureId = sourceFeatureId != null ? sourceFeatureId : id;
+        this.coordinateUtm = point != null ? point.getCoordinate() : new Coordinate(0, 0);
+        this.type = parseRouteNodeType(nodeType);
+    }
+
+    private static RouteNodeType parseRouteNodeType(String nodeType) {
+        if (nodeType == null) {
+            return RouteNodeType.TECHNICAL_NODE;
+        }
+        String upper = nodeType.toUpperCase();
+        if (upper.contains("OKS")) return RouteNodeType.OKS_POINT;
+        if (upper.contains("EXISTING") || upper.contains("CHAMBER")) return RouteNodeType.EXISTING_CHAMBER;
+        if (upper.contains("NEW")) return RouteNodeType.NEW_CHAMBER;
+        if (upper.contains("CORNER")) return RouteNodeType.CORNER;
+        return RouteNodeType.TECHNICAL_NODE;
     }
 
     public UUID getId() {
@@ -52,12 +71,11 @@ public final class RouteNode {
         return sourceFeatureId;
     }
 
-    @Override
-    public String toString() {
-        return "RouteNode{" +
-                "id=" + id +
-                ", type=" + type +
-                ", coordinateUtm=" + coordinateUtm +
-                '}';
+    public Point getPoint() {
+        return coordinateUtm != null ? GF.createPoint(coordinateUtm) : null;
+    }
+
+    public String getNodeType() {
+        return type != null ? type.name().toLowerCase() : "technical_node";
     }
 }
