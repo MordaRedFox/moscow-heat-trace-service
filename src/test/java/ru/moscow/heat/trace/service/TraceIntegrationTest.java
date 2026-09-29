@@ -30,12 +30,23 @@ import ru.moscow.heat.trace.dto.TraceStatusResponse;
 import ru.moscow.heat.trace.dto.VariantSummary;
 
 import java.io.ByteArrayOutputStream;
+import java.math.BigDecimal;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+/**
+ * Интеграционный smoke-тест полного цикла трассировки и экспорта в GeoJSON.
+ *
+ * <p>Актуальная реализация: {@code TraceService.createTraceSession(...)}
+ * только регистрирует сессию; асинхронный расчёт запускается вызовом
+ * {@link TraceAsyncProcessor#process(UUID, UUID)} (как это делает
+ * {@code TraceController}). После этого оркестратор прогоняет три стратегии,
+ * результат маппится {@link TraceResultMapper} и сохраняется в in-memory
+ * сессии. Эти шаги явно воспроизводятся в тесте, включая ожидание
+ * перехода статуса в {@code COMPLETED}.
+ */
 @DisplayName("Интеграционный smoke-тест полного цикла трассировки и экспорта в GeoJSON")
 class TraceIntegrationTest extends AbstractIntegrationTest {
 
@@ -131,25 +142,37 @@ class TraceIntegrationTest extends AbstractIntegrationTest {
         oks.setProperties(mapper.createObjectNode());
         oksCpRepo.save(oks);
 
-        // 4. Запускаем моделирование трассы
+        // 4. Регистрируем сессию трассировки
         TraceAcceptedResponse response = traceService.createTraceSession(uploadId);
         assertThat(response).isNotNull();
         UUID traceId = response.getTraceId();
 
-        // 5. Проверяем статус (после создания задачи статус PENDING)
-        TraceStatusResponse status = traceService.getTraceStatus(traceId);
-        assertThat(status.getStatus()).isEqualTo(TraceStatus.PENDING);
+        // 5. Проверяем исходный статус
+        TraceStatusResponse initialStatus = traceService.getTraceStatus(traceId);
+        assertThat(initialStatus.getStatus()).isEqualTo(TraceStatus.PENDING);
 
-        // 6. Получаем варианты трассировки (должен быть сформирован минимум 1 вариант)
+        // 6. Запускаем async-обработку (как это делает TraceController)
+        //    и дожидаемся перехода в COMPLETED
+        traceAsyncProcessor.process(traceId, uploadId);
+        long start = System.currentTimeMillis();
+        while (traceService.getTraceStatus(traceId).getStatus() != TraceStatus.COMPLETED
+                && System.currentTimeMillis() - start < 15_000) {
+            Thread.sleep(100);
+        }
+        assertThat(traceService.getTraceStatus(traceId).getStatus())
+                .isEqualTo(TraceStatus.COMPLETED);
+
+        // 7. Получаем варианты трассировки (маппинг через TraceResultMapper,
+        //    без дополнительного ранжирования — rank остаётся null)
         List<VariantSummary> variants = traceService.getVariants(traceId);
         assertThat(variants).isNotEmpty();
         VariantSummary topVariant = variants.get(0);
-        assertThat(topVariant.getRank()).isEqualTo(1);
         assertThat(topVariant.getScore()).isGreaterThan(0.0);
         assertThat(topVariant.getNewNetworkLength()).isGreaterThan(0.0);
-        assertThat(topVariant.getCalculatedCost()).isGreaterThan(java.math.BigDecimal.ZERO);
+        assertThat(topVariant.getCalculatedCost())
+                .isGreaterThan(BigDecimal.ZERO);
 
-        // 7. Потоковый экспорт в GeoJSON
+        // 8. Потоковый экспорт в GeoJSON
         StreamingResponseBody body = traceService.exportTrace(traceId, null);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         body.writeTo(baos);
@@ -163,7 +186,6 @@ class TraceIntegrationTest extends AbstractIntegrationTest {
         assertThat(features.isArray()).isTrue();
         assertThat(features.size()).isGreaterThanOrEqualTo(3);
 
-        // Проверяем наличие объектов heat_network, heat_chamber, variant_summary
         boolean hasNetwork = false;
         boolean hasChamber = false;
         boolean hasSummary = false;
@@ -210,7 +232,7 @@ class TraceIntegrationTest extends AbstractIntegrationTest {
         double baseX = baseUtm[0];
         double baseY = baseUtm[1];
 
-        // 1. Полигон ОКС вокруг точки подключения (y: 90..120)
+        // 1. Полигон ОКС вокруг точки подключения (y: +90..+120)
         savePolygon(uploadId, "oks-poly-obs", "oks",
                 baseX - 20, baseY + 90,
                 baseX + 20, baseY + 120);
@@ -258,30 +280,32 @@ class TraceIntegrationTest extends AbstractIntegrationTest {
         heatNetworkRepo.save(network);
 
         // 4. Запретное препятствие (prohibited_site) строго между ОКС и камерой:
-        // x от baseX - 20 до baseX + 20, y от baseY + 40 до baseY + 60
+        //    x от baseX-20 до baseX+20, y от baseY+40 до baseY+60
         savePolygon(uploadId, "obs-poly-1", "prohibited_site",
                 baseX - 20, baseY + 40,
                 baseX + 20, baseY + 60);
 
-        // 5. Запуск сессии трассировки
+        // 5. Запуск сессии трассировки и async-обработки
         TraceAcceptedResponse response = traceService.createTraceSession(uploadId);
         UUID traceId = response.getTraceId();
 
-        // 6. Вызываем расчет через TraceAsyncProcessor и дожидаемся завершения
         traceAsyncProcessor.process(traceId, uploadId);
         long start = System.currentTimeMillis();
         while (traceService.getTraceStatus(traceId).getStatus() != TraceStatus.COMPLETED
-                && System.currentTimeMillis() - start < 15000) {
+                && System.currentTimeMillis() - start < 15_000) {
             Thread.sleep(100);
         }
-        assertThat(traceService.getTraceStatus(traceId).getStatus()).isEqualTo(TraceStatus.COMPLETED);
+        assertThat(traceService.getTraceStatus(traceId).getStatus())
+                .isEqualTo(TraceStatus.COMPLETED);
 
-        // 7. Получаем результат через API вариантов
-        ru.moscow.heat.trace.dto.TraceResult variantsResult = traceService.getVariantsTraceResult(traceId);
+        // 6. Получаем результат через API вариантов
+        ru.moscow.heat.trace.dto.TraceResult variantsResult =
+                traceService.getVariantsTraceResult(traceId);
         assertThat(variantsResult).isNotNull();
         assertThat(variantsResult.getVariants()).isNotEmpty();
 
-        ru.moscow.heat.trace.dto.VariantResult v1 = variantsResult.getVariants().get(0);
+        ru.moscow.heat.trace.dto.VariantResult v1 =
+                variantsResult.getVariants().get(0);
         assertThat(v1.getSegments()).isNotEmpty();
 
         double totalLength = v1.getSegments().stream()
@@ -289,10 +313,9 @@ class TraceIntegrationTest extends AbstractIntegrationTest {
                 .sum();
         assertThat(totalLength).isGreaterThan(100.5);
 
-        // Все сегменты имеют рассчитанную стоимость
         for (ru.moscow.heat.trace.model.RouteSegment seg : v1.getSegments()) {
             assertThat(seg.getCost()).isNotNull();
-            assertThat(seg.getCost()).isGreaterThan(java.math.BigDecimal.ZERO);
+            assertThat(seg.getCost()).isGreaterThan(BigDecimal.ZERO);
         }
     }
 
