@@ -1,6 +1,488 @@
-# moscow-heat-trace-service
+<div align="center">
 
-## Структура проекта на данный момент
+# Сервис моделирования трасс подключения к тепловым сетям
+
+[![Java](https://img.shields.io/badge/Java-11-ED8B00?logo=openjdk&logoColor=white)](https://openjdk.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-2.6.3-6DB33F?logo=spring-boot&logoColor=white)](https://spring.io/projects/spring-boot)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![PostGIS](https://img.shields.io/badge/PostGIS-3.4-336791?logo=postgresql&logoColor=white)](https://postgis.net/)
+[![Docker](https://img.shields.io/badge/Docker-compose%201.29.2-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+
+</div>
+
+<div align="justify">
+
+Сервис автоматически строит варианты подключения перспективных ОКС к существующей тепловой сети Москвы: выбирает точки врезки, трассирует новую сеть в обход препятствий, подбирает условные диаметры, рассчитывает стоимость и выгружает результат в GeoJSON
+
+</div>
+
+---
+
+## Требования к окружению
+
+- ОС: Ubuntu Server 22 (для развёртывания), любая ОС для разработки
+- Java: 11 (JDK)
+- Maven: 3.9.9 (в devcontainer, совпадает с Dockerfile)
+- Docker: 20.10+ и docker-compose: 1.29.2
+- ОЗУ: не менее 16 ГБ
+- PostgreSQL: 15+ с расширением PostGIS 3.4 (поднимается автоматически через docker-compose)
+
+---
+
+## Быстрый запуск
+
+### 1. Клонирование и сборка
+
+```bash
+git clone https://github.com/MordaRedFox/moscow-heat-trace-service.git
+cd moscow-heat-trace-service
+mvn -B clean package -DskipTests
+```
+
+### 2. Запуск через docker-compose
+
+```bash
+docker-compose up -d
+```
+
+Поднимутся два сервиса:
+- app — Spring Boot приложение на порту 8080
+- postgres — БД heat_trace с PostGIS (порт 5432)
+
+Проверка, что сервис поднялся:
+```bash
+curl -s http://localhost:8080/api/health
+# {"status":"UP","service":"heat-trace-service",...}
+```
+
+Swagger UI: `http://localhost:8080/swagger-ui.html`
+
+### 3. Локальный запуск без докера
+
+Если PostgreSQL/PostGIS уже доступны локально:
+```bash
+export SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/heat_trace
+export SPRING_DATASOURCE_USERNAME=heat
+export SPRING_DATASOURCE_PASSWORD=heat
+mvn spring-boot:run
+```
+
+### 4. Остановка
+
+```bash
+docker-compose down
+# вместе с томами (удаляет все данные):
+docker-compose down -v
+```
+
+---
+
+## Сценарий работы
+
+### Шаг 1. Загрузка GeoJSON
+
+```bash
+curl -X POST http://localhost:8080/api/geojson/upload \
+  -F "file=@path/to/dataset.geojson"
+```
+Ответ `202 Accepted`:
+```json
+{
+  "uploadId": "57c9e6c2-2453-4a14-a84a-256d72c02f6a",
+  "status": "PENDING",
+  "statusUrl": "/api/geojson/uploads/57c9e6c2-2453-4a14-a84a-256d72c02f6a"
+}
+```
+
+### Шаг 2. Опрос статуса загрузки
+
+```bash
+curl -s http://localhost:8080/api/geojson/uploads/$UPLOAD_ID | jq
+```
+Когда `status = COMPLETED` — данные разложены по таблицам и готовы к трассировке
+
+### Шаг 3. Запуск трассировки
+
+```bash
+curl -X POST http://localhost:8080/api/trace/$UPLOAD_ID
+```
+Ответ `202 Accepted` с `traceId`. Далее опрос:
+```bash
+curl -s http://localhost:8080/api/trace/$TRACE_ID | jq
+```
+Статусы: `PENDING → PROCESSING → COMPLETED` (или `FAILED`)
+
+### Шаг 4. Получение вариантов
+
+```bash
+curl -s http://localhost:8080/api/trace/$TRACE_ID/variants | jq
+```
+Возвращает список сводок (`VariantSummary`): `rank`, `score`, `calculatedCost`, `newNetworkLength`, `unconnectedPenalty` и т.д.
+
+### Шаг 5. Экспорт в GeoJSON
+
+Один вариант:
+```bash
+curl -o v1.geojson "http://localhost:8080/api/trace/$TRACE_ID/export?variantId=v1"
+```
+
+Все варианты одним файлом:
+```bash
+curl -o all.geojson "http://localhost:8080/api/trace/$TRACE_ID/export"
+```
+
+---
+
+## REST API
+
+<table>
+  <thead>
+    <tr>
+      <th>Метод</th>
+      <th>Путь</th>
+      <th>Назначение</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/api/health</code></td>
+      <td>Проверка живости сервиса</td>
+    </tr>
+    <tr>
+      <td><code>POST</code></td>
+      <td><code>/api/geojson/upload</code></td>
+      <td>Загрузка GeoJSON (multipart/form-data, поле <code>file</code>)</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/api/geojson/uploads/{uploadId}</code></td>
+      <td>Статус парсинга, счётчики, ошибки, bbox</td>
+    </tr>
+    <tr>
+      <td><code>POST</code></td>
+      <td><code>/api/trace/{uploadId}</code></td>
+      <td>Запуск трассировки</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/api/trace/{traceId}</code></td>
+      <td>Статус трассировки</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/api/trace/{traceId}/candidates</code></td>
+      <td>Кандидаты на присоединение (отладка)</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/api/trace/{traceId}/variants</code></td>
+      <td>Сводки вариантов</td>
+    </tr>
+    <tr>
+      <td><code>GET</code></td>
+      <td><code>/api/trace/{traceId}/export?variantId=v1</code></td>
+      <td>Экспорт GeoJSON</td>
+    </tr>
+  </tbody>
+</table>
+
+Все параметры пути — UUID. Ошибки в формате `{"error": "..."}`. Коды: `400` (структура), `404` (не найдено), `500` (внутренняя ошибка)
+
+---
+
+## Как работает алгоритм
+
+### 1. Загрузка и парсинг
+
+Файл читается потоково (`JsonParser`) — не грузится целиком в память. Каждая валидная фича превращается в JTS-геометрию (`geom`, SRID 4326) и её UTM-проекцию (`geom_utm`, SRID 32637). Все метрические расчеты выполняются в UTM 37N. Валидация: обязательные атрибуты по типу объекта, типы геометрии, диапазоны координат, уникальность `id`. Числовой `id` (по ТП раздел 1.1) и строковый — оба допустимы.
+
+```java
+// Пример: парсинг потоком, батчами по 500 фич
+try (JsonParser parser = objectMapper.getFactory().createParser(inputStream)) {
+    while (parser.nextToken() != JsonToken.END_ARRAY) {
+        JsonNode feature = objectMapper.readTree(parser);
+        // валидация, маппинг, добавление в батч
+    }
+}
+```
+
+### 2. Кандидаты на врезку
+
+Для каждой `oks_connection_point`:
+1. Ближайший участок `heat_network` (KNN-оператор `<->`)
+2. Точка на этом участке — потенциальная врезка
+3. Существующие `heat_chamber` в радиусе 10 м — проверка примыканий (≤ 4)
+4. Если камера подходит — `EXISTING_CHAMBER` со стоимостью врезки 5 000 000 руб
+5. Иначе — `NEW_CHAMBER` в точке на сети, ДУ по flow, стоимость по табл. 3.2 ТП
+
+```sql
+-- KNN: ближайший участок сети к точке ОКС
+SELECT * FROM heat_network n
+WHERE n.upload_id = :uploadId
+ORDER BY n.geometry_utm <-> ST_Transform(ST_GeomFromText(:pointWkt, 4326), 32637)
+LIMIT 1;
+```
+
+### 3. Группировка ОКС
+
+`OksGrouper` объединяет ОКС по:
+- общей существующей камере (`existingChamberId`)
+- близости tie-in точек (≤ 30 м)
+
+Остальные — одиночные группы. Группы из 2+ ОКС обрабатываются через дерево маршрутов с общим стволом
+
+```java
+public enum TraceStrategy {
+    MAIN,       // группировка + лучший кандидат
+    NO_GROUP,   // каждый ОКС отдельно
+    ALT_TIE_IN  // альтернативный кандидат
+}
+```
+
+### 4. Трассировка
+
+Одиночный ОКС (линейный пайплайн):
+1. A* по visibility graph от ОКС к tie-in
+2. Свой полигон ОКС игнорируется (по разъяснениям п. 3 ТП — финальный прямой участок)
+3. `RouteSimplifier` — string-pulling для устранения зигзагов
+4. `AngleChecker` — проверка углов ≥ 45° для `road`/`tram_tracks`
+5. Разбиение на сегменты по границам спецзон
+6. `DiameterAssigner` — подбор ДУ по расходу и предельной длине
+7. `LengthValidator` — защитная проверка
+
+```java
+// Ключевые шаги в TraceOrchestrator.processOne
+VisibilityGraph.PathResult path = graph.shortestPath(startUtm, endUtm, ignoredIds);
+List<Coordinate> simplified = routeSimplifier.simplify(path.getPathUtm(), obstacleModel, ignoredIds);
+// ... splitter → diameterAssigner → lengthValidator
+```
+
+Группа ОКС (tree-пайплайн):
+1. `TreeRouter` — A* на каждый ОКС + слияние общих префиксов в дерево
+2. `FlowAggregator` — суммирование flow снизу вверх по дереву
+3. `TreeDiameterAssigner` — ДУ с инвариантом «не убывает от листа к корню» и предельной длиной по каждому пути
+4. `TreeRouteSegmentSplitter` — сегменты + камеры для ветвлений и корня
+5. Fallback на одиночный пайплайн, если групповой не сработал
+
+```java
+// Три фазы TreeDiameterAssigner
+assignByFlow(tree);         // 1. минимальный ДУ по расходу
+enforceMonotonicity(tree);  // 2. ДУ не убывает от листа к корню
+enforceMaxLength(tree);     // 3. предельная длина по каждому пути
+```
+
+### 5. Пространственные ограничения
+
+Из ТП таблица 2:
+- `FORBIDDEN` (`oks`, `park`, `social_area`, `prohibited_site`, `water`, `railway`) — обход с отступом
+- `SPECIAL_CROSSING` (`road`, `tram_tracks`, `gas_pipeline`, `power_cable`, `heat_network`) — спецпроход с `Kспец`
+
+Для `FORBIDDEN` используются буферы + `PreparedGeometry.crosses` + STRtree-индекс. Для `SPECIAL` — `intersects` с буфером, `Kспец = max` при наложении
+
+```java
+// Двухуровневая проверка видимости
+if (!segmentEnv.intersects(zone.getEnvelope())) continue;         // 1. envelope prefilter
+if (zone.getPreparedGeometry().crosses(segment)) return false;    // 2. PreparedGeometry
+```
+
+### 6. Стоимость и ранжирование
+
+Стоимость участка: `Cуч = L · cнов(ДУ) · Kгл · Kспец`
+- `cнов(ДУ)` — из таблицы 1 ТП
+- `Kгл = 1` в 2D-режиме
+- `Kспец` — из таблицы 2, максимум при наложении
+
+Стоимость варианта: новые участки + новые камеры + врезки + штраф за неподключенные. Штраф за ОКС: `100 000 000 + 500 000 · G`. Итоговый показатель: `S = 0.7·(C/25M) + 0.3·(L/100)`
+
+```java
+public double calculateScore(BigDecimal calculatedCost, double newNetworkLength) {
+    double costPart = 0.7 * (calculatedCost.doubleValue() / 25_000_000.0);
+    double lengthPart = 0.3 * (newNetworkLength / 100.0);
+    return costPart + lengthPart;
+}
+```
+
+### 7. Варианты
+
+Формируется до 3 содержательно отличающихся вариантов:
+- v1 (MAIN) — группировка + лучший кандидат
+- v2 (NO_GROUP) — каждый ОКС отдельно
+- v3 (ALT_TIE_IN) — альтернативный кандидат врезки
+
+Все строятся одним пайплайном (visibility graph + A*), отличаются только входными параметрами
+
+---
+
+## Формат выходного GeoJSON
+
+`FeatureCollection` в WGS 84 (EPSG:4326) с объектами:
+
+<table>
+  <thead>
+    <tr>
+      <th><code>object_type</code></th>
+      <th>Геометрия</th>
+      <th>Ключевые атрибуты</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>heat_network</code></td>
+      <td><code>LineString</code></td>
+      <td><code>start_node_id</code>, <code>end_node_id</code>, <code>flow_tph</code>, <code>diameter</code>, <code>length</code>, <code>laying_method</code>, <code>depth_start</code>, <code>depth_end</code>, <code>cost</code>, <code>variant_id</code></td>
+    </tr>
+    <tr>
+      <td><code>heat_chamber</code></td>
+      <td><code>Point</code></td>
+      <td><code>diameter</code>, <code>cost</code>, <code>variant_id</code></td>
+    </tr>
+    <tr>
+      <td><code>technical_node</code></td>
+      <td><code>Point</code></td>
+      <td><code>variant_id</code></td>
+    </tr>
+    <tr>
+      <td><code>variant_summary</code></td>
+      <td><code>null</code></td>
+      <td><code>rank</code>, <code>construction_cost</code>, <code>chamber_construction_cost</code>, <code>existing_chamber_tie_in_count</code>, <code>existing_chamber_tie_in_cost</code>, <code>unconnected_penalty</code>, <code>calculated_cost</code>, <code>new_network_length</code>, <code>score</code>, <code>unconnected_oks_ids</code></td>
+    </tr>
+  </tbody>
+</table>
+
+Идентификаторы — строковые или числовые, сохраняют исходный тип
+
+### Пример выходного GeoJSON
+
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": "v1-seg-1",
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [37.6344054041544, 55.6994810644531],
+          [37.6338, 55.6995]
+        ]
+      },
+      "properties": {
+        "id": "v1-seg-1",
+        "object_type": "heat_network",
+        "variant_id": "v1",
+        "start_node_id": "1",
+        "end_node_id": "ch-branch-a1b2c3d4",
+        "flow_tph": 24.87,
+        "diameter": 100,
+        "length": 72.4,
+        "laying_method": "base",
+        "depth_start": null,
+        "depth_end": null,
+        "cost": 6498400.00
+      }
+    },
+    {
+      "type": "Feature",
+      "id": "v1-summary",
+      "geometry": null,
+      "properties": {
+        "id": "v1-summary",
+        "object_type": "variant_summary",
+        "variant_id": "v1",
+        "rank": 1,
+        "construction_cost": 145230000.00,
+        "chamber_construction_cost": 42000000.00,
+        "existing_chamber_tie_in_count": 3,
+        "existing_chamber_tie_in_cost": 15000000.00,
+        "unconnected_penalty": 0.00,
+        "calculated_cost": 145230000.00,
+        "new_network_length": 8420.5,
+        "score": 29.34,
+        "unconnected_oks_ids": []
+      }
+    }
+  ]
+}
+```
+
+---
+
+## Обработка ошибок и частичных результатов
+
+- Структурные ошибки GeoJSON → `400 Bad Request`
+- Ошибка обработки загрузки → сессия в статусе `FAILED` с `errorMessage`
+- Неподключённые ОКС → попадают в `unconnectedOksFeatureIds`, штраф учитывается в стоимости. Сервис обрабатывает оставшиеся ОКС и возвращает частичный результат
+- Fallback групп → если групповой пайплайн не сработал (нет дерева, нарушение угла, не сошёлся ДУ), группа обрабатывается поштучно. Причина пишется в лог
+
+```json
+{
+  "error": "Загрузка не найдена: 00000000-0000-0000-0000-000000000000"
+}
+```
+
+Три причины неподключения (`UnconnectedOks.Reason`):
+
+<table>
+  <thead>
+    <tr>
+      <th>Reason</th>
+      <th>Когда возникает</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>NO_TIE_IN_CANDIDATE</code></td>
+      <td>Нет <code>heat_network</code> или подходящей камеры рядом с точкой ОКС</td>
+    </tr>
+    <tr>
+      <td><code>NO_PATH_IN_GRAPH</code></td>
+      <td>Граф видимости не даёт пути от ОКС к tie-in</td>
+    </tr>
+    <tr>
+      <td><code>PATH_REJECTED_BY_VALIDATION</code></td>
+      <td>Нарушен угол, превышена предельная длина и т.п.</td>
+    </tr>
+  </tbody>
+</table>
+
+При групповом пайплайне — при любой ошибке в `processGroup` группа уходит в fallback на поштучную обработку
+
+---
+
+## Ограничения
+
+- 2D-режим. Глубина и продольный профиль не рассчитываются. `Kгл = 1`, `depth_start = depth_end = null`
+- Реконструкция существующей сети не выполняется (по актуальному ТП, разъяснение 14)
+- Полный гидравлический расчёт не делается — только подбор ДУ и проверка предельной длины
+- Отступ от ОКС взят по максимальному ДУ (9 м) — консервативно для всех маршрутов
+- Объединение ОКС реализовано по простым правилам (общая камера, радиус 30 м). Оптимальная группировка не гарантируется
+- Проверочный набор может отличаться по количеству объектов и сложности геометрии. Логика не завязана на конкретные координаты, ID или конфигурацию
+
+### Что не входит в обязательную часть
+
+Согласно ТЗ раздел 2.12, не требуется:
+- выполнять полный гидравлический расчёт (давление, потери напора, скорости, насосные режимы)
+- рассчитывать или развивать мощность источника
+- в обязательной части учитывать глубину и строить продольный профиль
+- выполнять рабочее проектирование и расчёты прочности
+- проектировать конструкцию тепловых камер и специальных переходов
+- рассчитывать температурные деформации и подбирать компенсаторы
+- готовить проектную документацию и решения по организации строительства
+- использовать надземную прокладку
+- определять положение ИТП внутри здания
+- изменять трассу существующей тепловой сети при реконструкции
+
+### Универсальность
+
+Координаты, идентификаторы и конкретная конфигурация конкурсного набора не зашиты в код. Сервис готов к запуску на проверочном наборе той же структуры без изменения алгоритма
+
+---
+
+## Структура проекта
+
 ```bash
 moscow-heat-trace-service/
 ├── .devcontainer/
